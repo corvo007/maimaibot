@@ -3,7 +3,7 @@ import peewee
 
 DATABASE_FILE = os.path.join(os.path.dirname(__file__), "data.sqlite")
 
-song_database = peewee.SqliteDatabase(
+song_database = peewee.SqliteDatabase(  # 正式上线切换成MySQL
     database=DATABASE_FILE,
     pragmas={
         "journal_mode": "wal",
@@ -47,6 +47,7 @@ class song_info(BaseDatabase):
 class chart_stat(BaseDatabase):
     song_id = peewee.BigIntegerField()
     level = peewee.IntegerField()
+    
     sample_num = peewee.IntegerField()
     fit_difficulty = peewee.DecimalField()
     avg_achievement = peewee.DecimalField()
@@ -58,3 +59,15 @@ class chart_stat(BaseDatabase):
     class Meta:
         primary_key = peewee.CompositeKey("song_id", "level")
 
+
+class player_record(BaseDatabase):
+    player_id = peewee.CharField()  # 登录用户名
+    song_id = peewee.IntegerField()
+    level = peewee.IntegerField()
+    type = peewee.IntegerField()
+    
+    achievement = peewee.DecimalField()
+    rating = peewee.IntegerField()
+    dxscore = peewee.IntegerField()
+    fc_status = peewee.IntegerField()
+    fs_status = peewee.IntegerField()
