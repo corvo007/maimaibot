@@ -1,14 +1,26 @@
+import datetime
 import os
 import peewee
+import json
+from playhouse.shortcuts import ReconnectMixin
 
-DATABASE_FILE = os.path.join(os.path.dirname(__file__), "data.sqlite")
+from model import ConfigModel
 
-song_database = peewee.SqliteDatabase(  # 正式上线切换成MySQL
-    database=DATABASE_FILE,
-    pragmas={
-        "journal_mode": "wal",
-        "cache_size": -1024 * 64,
-    },
+
+class RetryMySQLDatabase(ReconnectMixin, peewee.MySQLDatabase):
+    pass
+
+
+with open(os.path.join(os.path.dirname(__file__), "config.json"), "r", encoding="utf-8") as f:
+    config = ConfigModel.parse_obj(json.load(f))
+
+song_database = RetryMySQLDatabase(
+    host=config.MySQL.MySQL_host,
+    port=config.MySQL.MySQL_port,
+    user=config.MySQL.MySQL_username,
+    password=config.MySQL.MySQL_password,
+    database=config.MySQL.MySQL_database,
+    charset="utf8",
 )
 
 
@@ -20,8 +32,7 @@ class BaseDatabase(peewee.Model):
 
 
 class song_info(BaseDatabase):
-    song_id = peewee.BigIntegerField()
-    level = peewee.IntegerField()  # 1~5分别代表Basic~Re:Master
+    song_id = peewee.BigIntegerField(primary_key=True)
     
     artist = peewee.CharField()
     song_title = peewee.CharField()
@@ -30,6 +41,11 @@ class song_info(BaseDatabase):
     genre = peewee.CharField()  # 流派
     is_new = peewee.BooleanField()  # 是否为当前版本歌曲
     type = peewee.IntegerField()  # 0:DX谱 1:标准谱
+
+
+class chart_info(BaseDatabase):
+    song_id = peewee.BigIntegerField()
+    level = peewee.IntegerField()  # 1~5分别代表Basic~Re:Master
     
     chart_design = peewee.CharField()  # 谱师
     tap_note = peewee.IntegerField()
@@ -56,11 +72,15 @@ class chart_stat(BaseDatabase):
     achievement_dist = peewee.CharField()
     fc_dist = peewee.CharField()
     
+    like = peewee.IntegerField()  # 点赞人数
+    dislike = peewee.IntegerField()  # 点踩人数
+    weight = peewee.DecimalField(default=1)  # 权重
+    
     class Meta:
         primary_key = peewee.CompositeKey("song_id", "level")
 
 
-class player_record(BaseDatabase):
+class chart_record(BaseDatabase):
     player_id = peewee.CharField()  # 登录用户名
     song_id = peewee.IntegerField()
     level = peewee.IntegerField()
@@ -71,3 +91,17 @@ class player_record(BaseDatabase):
     dxscore = peewee.IntegerField()
     fc_status = peewee.IntegerField()
     fs_status = peewee.IntegerField()
+    
+    record_time = peewee.DateTimeField(default=datetime.datetime.now())
+
+
+class rating_record(BaseDatabase):
+    player_id = peewee.CharField()
+    old_song_rating = peewee.IntegerField()
+    new_song_rating = peewee.IntegerField()
+    
+    record_time = peewee.DateTimeField(default=datetime.datetime.now())
+
+
+class song_data_version(BaseDatabase):
+    version = peewee.CharField()

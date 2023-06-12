@@ -35,6 +35,8 @@ note数/谱师/艺术家/bpm/更新版本/流派/曲名/新老定数/类型（�
 
 https://www.diving-fish.com/covers/00627.png # 封面图片，最后是id
 
+id:标准谱4位，DX谱5位
+
 ```json5
 {
 	"basic_info": {
