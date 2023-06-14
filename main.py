@@ -6,11 +6,10 @@ from fastapi import FastAPI
 
 from database import BaseDatabase, config, song_database
 from log import logger
-from tools import check_song_update
+from core import check_song_update, run_chart_stat_update
 
 app = FastAPI(title="maibot")
 scheduler = AsyncIOScheduler()
-VERSION_FILE = "https://bucket-1256206908.cos.ap-shanghai.myqcloud.com/update.json"
 
 
 @app.on_event("startup")
@@ -35,9 +34,10 @@ async def initialize_database():
 
 
 @app.on_event("startup")
-async def check_song_update_on_startup() -> None:
+async def check_update_on_startup() -> None:
     await asyncio.sleep(15)
     await check_song_update()
+    await run_chart_stat_update()
 
 
 if __name__ == "__main__":

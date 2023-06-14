@@ -1,7 +1,8 @@
 import datetime
-import os
-import peewee
 import json
+import os
+
+import peewee
 from playhouse.shortcuts import ReconnectMixin
 
 from model import ConfigModel
@@ -44,7 +45,7 @@ class song_info(BaseDatabase):
 
 
 class chart_info(BaseDatabase):
-    song_id = peewee.BigIntegerField()
+    song_id = peewee.ForeignKeyField(song_info)
     level = peewee.IntegerField()  # 1~5分别代表Basic~Re:Master
     
     chart_design = peewee.CharField()  # 谱师
@@ -72,8 +73,8 @@ class chart_stat(BaseDatabase):
     achievement_dist = peewee.CharField()
     fc_dist = peewee.CharField()
     
-    like = peewee.IntegerField()  # 点赞人数
-    dislike = peewee.IntegerField()  # 点踩人数
+    like = peewee.IntegerField(default=0)  # 点赞人数
+    dislike = peewee.IntegerField(default=0)  # 点踩人数
     weight = peewee.DecimalField(default=1)  # 权重
     
     class Meta:
