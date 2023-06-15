@@ -1,12 +1,13 @@
 import asyncio
 import decimal
 import json
-from typing import List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Tuple
 
 import httpx
 import numpy as np
 from peewee import JOIN, fn
 from playhouse.shortcuts import model_to_dict
+from pydantic import ValidationError
 
 from database import (
     chart_blacklist,
@@ -15,7 +16,9 @@ from database import (
     song_data_version,
     song_info,
 )
+from exception import ParameterError
 from log import logger
+from model import player_preferences
 
 VERSION_FILE = "https://bucket-1256206908.cos.ap-shanghai.myqcloud.com/update.json"
 STAT_API = "https://www.diving-fish.com/api/maimaidxprober/chart_stats"
@@ -211,24 +214,52 @@ async def recommend_charts(
     personal_grades: List[dict],
     player_id: int,
     grade_type: Literal["new", "old"],
-    preferences: Optional[Literal["aggressive", "balance", "conservative"]] = "balance",
+    preferences: dict,
     limit: int = 10,
-) -> List[dict]:
+) -> Dict[List[dict], int]:
+    try:
+        preferences = player_preferences.parse_obj(preferences)
+    except ValidationError as e:
+        raise ParameterError(e)
     personal_grades.sort(key=lambda x: x["ra"], reverse=True)
+    message_list = []
     if grade_type == "new":
-        charts_score = [int(x["ra"]) for x in personal_grades[:15]]
+        personal_grades_filtered = personal_grades[:30]
+        charts_score = [int(x["ra"]) for x in personal_grades_filtered[:15]]
+        played_song_ids = (
+            [score["song_id"] for score in personal_grades_filtered]
+            if preferences.exclude_played
+            else []
+        )
+        if len(played_song_ids) < 30:
+            message_list.append(
+                {"type": "warning", "message": "新版本游玩过的歌曲数不足，无法准确估计玩家水平，歌曲推荐可能不准确"}
+            )
     else:
-        charts_score = [int(x["ra"]) for x in personal_grades[:35]]
+        personal_grades_filtered = personal_grades[:70]
+        charts_score = [int(x["ra"]) for x in personal_grades_filtered[:35]]
+        played_song_ids = (
+            [score["song_id"] for score in personal_grades_filtered]
+            if preferences.exclude_played
+            else []
+        )
+        if len(played_song_ids) < 70:
+            message_list.append(
+                {"type": "warning", "message": "旧版本游玩过的歌曲数不足，无法准确估计玩家水平，歌曲推荐可能不准确"}
+            )
+    personal_grades_dict = {}
+    for chart in personal_grades_filtered:
+        personal_grades_dict[chart["song_id"]] = chart
     median_score = np.median(charts_score)
     min_score = np.min(charts_score)
-    if preferences == "balance":
+    if preferences.recommend_preferences == "balance":
         # min:SS (99.00%) max:SS+(99.50%)
         # max+min_score ~ min+median_score
         upper_difficulty = median_score * 100 / 99.00 / song_rating_coefficient[-6][1]
         lower_difficulty = (
             (min_score + 1) * 100 / 99.50 / song_rating_coefficient[-5][1]
         )
-    elif preferences == "conservative":
+    elif preferences.recommend_preferences == "conservative":
         # min:SS+ Top(99.99%) max:SSS+(100.50%)
         upper_difficulty = median_score * 100 / 99.99 / song_rating_coefficient[-4][1]
         lower_difficulty = (
@@ -283,13 +314,21 @@ async def recommend_charts(
                 & (chart_blacklist.player_id == player_id)
             ),
             join_type=JOIN.LEFT_OUTER,
-        )  # 使用LEFT OUTER JOIN连接chart_blacklist表
+        )
         .where(
-            (base_condition & grade_condition) & (chart_blacklist.player_id.is_null())
-        )  # 检查黑名单玩家是否为NULL
+            (base_condition & grade_condition)
+            & (chart_blacklist.player_id.is_null())
+            & (~(chart_info.song_id << played_song_ids))
+        )  # 添加对已玩过的歌曲的筛选条件
         .order_by(order_expression.desc())
         .limit(limit)
     )
+
+    count_query = song_info.select().where(grade_condition).count()
+    if count_query < 40:
+        message_list.append(
+            {"type": "warning", "message": "当前处于版本更新初期，可玩歌曲较少，歌曲推荐可能不准确"}
+        )
 
     # 查询结果转换为包含字典的列表
     result_list = []
@@ -299,15 +338,41 @@ async def recommend_charts(
         song_info_dict = model_to_dict(record.song_id)
 
         merged_dict = {**chart_info_dict, **chart_stat_dict, **song_info_dict}
+
+        if merged_dict["song_id"] in personal_grades_dict:
+            merged_dict["achievement"] = personal_grades_dict[merged_dict["song_id"]][
+                "achievements"
+            ]
+        else:
+            merged_dict["achievement"] = 0
+
         result_list.append(merged_dict)
-    print([f'{x["song_title"]}({x["level"]},{x["difficulty"]})' for x in result_list])
-    print(result_list)
-    return result_list
+    print(
+        [
+            f'{x["song_title"]}({x["level"]},{x["difficulty"]}/{x["achievement"]})'
+            for x in result_list
+        ]
+    )
+    recommend_list = {
+        "recommend_charts": result_list,
+        "min_rating": min_score,
+        "messages": message_list,
+    }
+    return recommend_list
 
 
 with open("response.json") as f:
     c = json.load(f)
 
-asyncio.run(
-    recommend_charts((separate_personal_data(c))[0], 0, "old", "balance"), debug=True
-)
+try:
+    asyncio.run(
+        recommend_charts(
+            (separate_personal_data(c))[0],
+            0,
+            "new",
+            {"recommend_preferences": "balance", "exclude_played": False},
+        ),
+        debug=True,
+    )
+except Exception as e:
+    print(e)

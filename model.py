@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, IPvAnyAddress
 
 
@@ -19,3 +21,8 @@ class UnicornConfigModel(BaseModel):
 class ConfigModel(BaseModel):
     MySQL: DataBaseConfigModel
     unicorn: UnicornConfigModel
+
+
+class player_preferences(BaseModel):
+    recommend_preferences: Literal["aggressive", "balance", "conservative"] = "balance"
+    exclude_played: bool = False

@@ -12,7 +12,9 @@ class RetryMySQLDatabase(ReconnectMixin, peewee.MySQLDatabase):
     pass
 
 
-with open(os.path.join(os.path.dirname(__file__), "config.json"), "r", encoding="utf-8") as f:
+with open(
+    os.path.join(os.path.dirname(__file__), "config.json"), "r", encoding="utf-8"
+) as f:
     config = ConfigModel.parse_obj(json.load(f))
 
 song_database = RetryMySQLDatabase(
@@ -27,14 +29,14 @@ song_database = RetryMySQLDatabase(
 
 class BaseDatabase(peewee.Model):
     pass
-    
+
     class Meta:
         database = song_database
 
 
 class song_info(BaseDatabase):
     song_id = peewee.BigIntegerField(primary_key=True)
-    
+
     artist = peewee.CharField()
     song_title = peewee.CharField()
     bpm = peewee.IntegerField()
@@ -47,7 +49,7 @@ class song_info(BaseDatabase):
 class chart_info(BaseDatabase):
     song_id = peewee.ForeignKeyField(song_info)
     level = peewee.IntegerField()  # 1~5分别代表Basic~Re:Master
-    
+
     chart_design = peewee.CharField()  # 谱师
     tap_note = peewee.IntegerField()
     hold_note = peewee.IntegerField()
@@ -56,7 +58,7 @@ class chart_info(BaseDatabase):
     break_note = peewee.IntegerField()
     difficulty = peewee.DecimalField(decimal_places=1)
     old_difficulty = peewee.DecimalField(decimal_places=1)
-    
+
     class Meta:
         primary_key = peewee.CompositeKey("song_id", "level")
 
@@ -64,7 +66,7 @@ class chart_info(BaseDatabase):
 class chart_stat(BaseDatabase):
     song_id = peewee.BigIntegerField()
     level = peewee.IntegerField()
-    
+
     sample_num = peewee.IntegerField()
     fit_difficulty = peewee.DecimalField()
     avg_achievement = peewee.DecimalField()
@@ -72,11 +74,11 @@ class chart_stat(BaseDatabase):
     std_dev = peewee.DecimalField()
     achievement_dist = peewee.CharField()
     fc_dist = peewee.CharField()
-    
+
     like = peewee.IntegerField(default=0)  # 点赞人数
     dislike = peewee.IntegerField(default=0)  # 点踩人数
     weight = peewee.DecimalField(default=1)  # 权重
-    
+
     class Meta:
         primary_key = peewee.CompositeKey("song_id", "level")
 
@@ -86,13 +88,13 @@ class chart_record(BaseDatabase):
     song_id = peewee.IntegerField()
     level = peewee.IntegerField()
     type = peewee.IntegerField()
-    
+
     achievement = peewee.DecimalField()
     rating = peewee.IntegerField()
     dxscore = peewee.IntegerField()
     fc_status = peewee.IntegerField()
     fs_status = peewee.IntegerField()
-    
+
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
 
@@ -101,9 +103,9 @@ class chart_blacklist(BaseDatabase):
     song_id = peewee.IntegerField()
     level = peewee.IntegerField()
     reason = peewee.CharField()
-    
+
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
-    
+
     class Meta:
         primary_key = peewee.CompositeKey("player_id", "song_id", "level")
 
@@ -112,7 +114,7 @@ class rating_record(BaseDatabase):
     player_id = peewee.CharField()
     old_song_rating = peewee.IntegerField()
     new_song_rating = peewee.IntegerField()
-    
+
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
 
