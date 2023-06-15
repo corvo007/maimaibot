@@ -96,6 +96,18 @@ class chart_record(BaseDatabase):
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
 
+class chart_blacklist(BaseDatabase):
+    player_id = peewee.CharField()
+    song_id = peewee.IntegerField()
+    level = peewee.IntegerField()
+    reason = peewee.CharField()
+    
+    record_time = peewee.DateTimeField(default=datetime.datetime.now())
+    
+    class Meta:
+        primary_key = peewee.CompositeKey("player_id", "song_id", "level")
+
+
 class rating_record(BaseDatabase):
     player_id = peewee.CharField()
     old_song_rating = peewee.IntegerField()

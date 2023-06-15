@@ -5,10 +5,16 @@ from typing import List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
-from peewee import fn
+from peewee import JOIN, fn
 from playhouse.shortcuts import model_to_dict
 
-from database import chart_info, chart_stat, song_data_version, song_info
+from database import (
+    chart_blacklist,
+    chart_info,
+    chart_stat,
+    song_data_version,
+    song_info,
+)
 from log import logger
 
 VERSION_FILE = "https://bucket-1256206908.cos.ap-shanghai.myqcloud.com/update.json"
@@ -203,6 +209,7 @@ async def record_player_data(personal_raw_data: List[dict]) -> None:
 
 async def recommend_charts(
     personal_grades: List[dict],
+    player_id: int,
     grade_type: Literal["new", "old"],
     preferences: Optional[Literal["aggressive", "balance", "conservative"]] = "balance",
     limit: int = 10,
@@ -268,7 +275,18 @@ async def recommend_charts(
             & (chart_info.level == chart_stat.level),
         )
         .join(song_info, on=(chart_info.song_id == song_info.song_id))
-        .where(base_condition & grade_condition)
+        .join(
+            chart_blacklist,
+            on=(
+                (chart_info.song_id == chart_blacklist.song_id)
+                & (chart_info.level == chart_blacklist.level)
+                & (chart_blacklist.player_id == player_id)
+            ),
+            join_type=JOIN.LEFT_OUTER,
+        )  # 使用LEFT OUTER JOIN连接chart_blacklist表
+        .where(
+            (base_condition & grade_condition) & (chart_blacklist.player_id.is_null())
+        )  # 检查黑名单玩家是否为NULL
         .order_by(order_expression.desc())
         .limit(limit)
     )
@@ -283,6 +301,7 @@ async def recommend_charts(
         merged_dict = {**chart_info_dict, **chart_stat_dict, **song_info_dict}
         result_list.append(merged_dict)
     print([f'{x["song_title"]}({x["level"]},{x["difficulty"]})' for x in result_list])
+    print(result_list)
     return result_list
 
 
@@ -290,5 +309,5 @@ with open("response.json") as f:
     c = json.load(f)
 
 asyncio.run(
-    recommend_charts((separate_personal_data(c))[0], "old", "conservative"), debug=True
+    recommend_charts((separate_personal_data(c))[0], 0, "old", "balance"), debug=True
 )
