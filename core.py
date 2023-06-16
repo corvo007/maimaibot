@@ -1,6 +1,8 @@
+import asyncio
 import decimal
 import json
-from typing import Dict, List, Literal, Tuple
+import time
+from typing import List, Tuple
 
 import httpx
 import numpy as np
@@ -243,150 +245,209 @@ async def record_player_data(personal_raw_data: List[dict], player_id: str) -> N
 
 
 async def recommend_charts(
-    personal_grades: List[dict],
-    player_id: str,
-    grade_type: Literal["new", "old"],
-    preferences: dict,
+    personal_raw_data: dict,
+    preferences: dict = None,
     limit: int = 10,
-) -> Dict[List[dict], int]:
+) -> dict:
+    time1 = time.time()
+    messages_list = []
+    if preferences is None:
+        preferences = dict()
     try:
         preferences = player_preferences.parse_obj(preferences)
     except ValidationError as e:
         raise ParameterError(e)
-    personal_grades.sort(key=lambda x: x["ra"], reverse=True)
-    message_list = []
-    if grade_type == "new":
-        personal_grades_filtered = personal_grades[:30]
-        charts_score = [int(x["ra"]) for x in personal_grades_filtered[:15]]
-        played_song_ids = (
-            [score["song_id"] for score in personal_grades_filtered]
-            if preferences.exclude_played
-            else []
-        )
-        if len(played_song_ids) < 30:
-            message_list.append(
-                {"type": "warning", "message": "新版本游玩过的歌曲数不足，无法准确估计玩家水平，歌曲推荐可能不准确"}
-            )
-    else:
-        personal_grades_filtered = personal_grades[:70]
-        charts_score = [int(x["ra"]) for x in personal_grades_filtered[:35]]
-        played_song_ids = (
-            [score["song_id"] for score in personal_grades_filtered]
-            if preferences.exclude_played
-            else []
-        )
-        if len(played_song_ids) < 70:
-            message_list.append(
-                {"type": "warning", "message": "旧版本游玩过的歌曲数不足，无法准确估计玩家水平，歌曲推荐可能不准确"}
-            )
+    player_id = personal_raw_data["username"]
+    personal_raw_data = personal_raw_data["records"]
+    personal_raw_data.sort(key=lambda x: x["ra"], reverse=True)
+
+    new_charts = list(filter(lambda x: x["song_id"] in new_song_id, personal_raw_data))
+    old_charts = list(
+        filter(lambda x: x["song_id"] not in new_song_id, personal_raw_data)
+    )
+
+    personal_grades_filtered_new = new_charts[:30]
+    personal_grades_filtered_old = old_charts[:70]
+    charts_score_new = [int(x["ra"]) for x in new_charts[:15]]
+    charts_score_old = [int(x["ra"]) for x in old_charts[:35]]
+    filtered_new_song_ids = []
+    filtered_old_song_ids = []
+    for score in personal_grades_filtered_new:
+        if score["achievements"] >= 100.5000:
+            filtered_new_song_ids.append(score["song_id"])
+            continue
+        if preferences.exclude_played:
+            filtered_new_song_ids.append(score["song_id"])
+
+    for score in personal_grades_filtered_old:
+        if score["achievements"] >= 100.5000:
+            filtered_old_song_ids.append(score["song_id"])
+            continue
+        if preferences.exclude_played:
+            filtered_old_song_ids.append(score["song_id"])
     personal_grades_dict = {}
-    for chart in personal_grades_filtered:
+    merged_grades = personal_grades_filtered_new + personal_grades_filtered_old
+    for chart in merged_grades:
         personal_grades_dict[chart["song_id"]] = chart
-    median_score = np.median(charts_score)
-    min_score = np.min(charts_score)
-    if preferences.recommend_preferences == "balance":
-        # min:SS (99.00%) max:SS+(99.50%)
-        # max+min_score ~ min+median_score
-        upper_difficulty = median_score * 100 / 99.00 / song_rating_coefficient[-6][1]
-        lower_difficulty = (
-            (min_score + 1) * 100 / 99.50 / song_rating_coefficient[-5][1]
-        )
-    elif preferences.recommend_preferences == "conservative":
-        # min:SS+ Top(99.99%) max:SSS+(100.50%)
-        upper_difficulty = median_score * 100 / 99.99 / song_rating_coefficient[-4][1]
-        lower_difficulty = (
-            (min_score + 1) * 100 / 100.50 / song_rating_coefficient[-1][1]
-        )
-    else:
-        # min:S(97.00%) max:S+(98.00%)
-        upper_difficulty = median_score * 100 / 97.00 / song_rating_coefficient[-8][1]
-        lower_difficulty = (
-            (min_score + 1) * 100 / 98.00 / song_rating_coefficient[-7][1]
-        )
 
-    upper_difficulty = float(upper_difficulty)
-    lower_difficulty = float(lower_difficulty)
-
-    if lower_difficulty > upper_difficulty:
-        lower_difficulty, upper_difficulty = upper_difficulty, lower_difficulty
-
-    base_condition = chart_info.difficulty.between(lower_difficulty, upper_difficulty)
-
-    grade_condition = (
-        (song_info.is_new == True)
-        if grade_type == "new"
-        else (song_info.is_new == False)
-    )
-
-    # 使用 IF 函数，当 like 和 dislike 之和小于5时设为 0.5，否则计算比例
-    like_dislike_ratio = fn.IF(
-        (chart_stat.like + chart_stat.dislike) < 5,
-        0.5,
-        chart_stat.like / (chart_stat.like + chart_stat.dislike),
-    )
-
-    # 构建排序计算公式
-    order_expression = (
-        chart_info.difficulty - chart_stat.fit_difficulty + like_dislike_ratio
-    ) * chart_stat.weight
-
-    query = (
-        chart_info.select(chart_info, chart_stat, song_info)
-        .join(
-            chart_stat,
-            on=(chart_info.song_id == chart_stat.song_id)
-            & (chart_info.level == chart_stat.level),
-        )
-        .join(song_info, on=(chart_info.song_id == song_info.song_id))
-        .join(
-            chart_blacklist,
-            on=(
-                (chart_info.song_id == chart_blacklist.song_id)
-                & (chart_info.level == chart_blacklist.level)
-                & (chart_blacklist.player_id == player_id)
-            ),
-            join_type=JOIN.LEFT_OUTER,
-        )
-        .where(
-            (base_condition & grade_condition)
-            & (chart_blacklist.player_id.is_null())
-            & (~(chart_info.song_id << played_song_ids))
-        )
-        .order_by(order_expression.desc())
-        .limit(limit)
-    )
-
-    count_query = song_info.select().where(grade_condition).count()
-    if count_query < 40:
-        message_list.append(
-            {"type": "warning", "message": "当前处于版本更新初期，可玩歌曲较少，歌曲推荐可能不准确"}
-        )
-
-    # 查询结果转换为包含字典的列表
-    result_list = []
-    for record in query:
-        chart_info_dict = model_to_dict(record)
-        chart_stat_dict = model_to_dict(record.chart_stat)
-        song_info_dict = model_to_dict(record.song_id)
-
-        merged_dict = {**chart_info_dict, **chart_stat_dict, **song_info_dict}
-
-        if merged_dict["song_id"] in personal_grades_dict:
-            merged_dict["achievement"] = personal_grades_dict[merged_dict["song_id"]][
-                "achievements"
-            ]
+    def _query_charts(is_new: bool, charts_score: list, filtered_song_ids: list):
+        median_score = np.median(charts_score)
+        min_score = np.min(charts_score)
+        if preferences.recommend_preferences == "balance":
+            # min:SS (99.00%) max:SS+(99.50%)
+            # max+min_score ~ min+median_score
+            upper_difficulty = (
+                median_score * 100 / 99.00 / song_rating_coefficient[-6][1]
+            )
+            lower_difficulty = (
+                (min_score + 1) * 100 / 99.50 / song_rating_coefficient[-5][1]
+            )
+        elif preferences.recommend_preferences == "conservative":
+            # min:SS+ Top(99.99%) max:SSS+(100.50%)
+            upper_difficulty = (
+                median_score * 100 / 99.99 / song_rating_coefficient[-4][1]
+            )
+            lower_difficulty = (
+                (min_score + 1) * 100 / 100.50 / song_rating_coefficient[-1][1]
+            )
         else:
-            merged_dict["achievement"] = 0
+            # min:S(97.00%) max:S+(98.00%)
+            upper_difficulty = (
+                median_score * 100 / 97.00 / song_rating_coefficient[-8][1]
+            )
+            lower_difficulty = (
+                (min_score + 1) * 100 / 98.00 / song_rating_coefficient[-7][1]
+            )
 
-        result_list.append(merged_dict)
+        if lower_difficulty > upper_difficulty:
+            lower_difficulty, upper_difficulty = upper_difficulty, lower_difficulty
+
+        upper_difficulty = float(upper_difficulty)
+        lower_difficulty = float(lower_difficulty)
+
+        base_condition = chart_info.difficulty.between(
+            lower_difficulty, upper_difficulty
+        )
+
+        grade_condition = (
+            (song_info.is_new == True) if is_new else (song_info.is_new == False)
+        )
+
+        # 使用 IF 函数，当 like 和 dislike 之和小于5时设为 0.5，否则计算比例
+        like_dislike_ratio = fn.IF(
+            (chart_stat.like + chart_stat.dislike) < 5,
+            0.5,
+            chart_stat.like / (chart_stat.like + chart_stat.dislike),
+        )
+
+        # 构建排序计算公式
+        order_expression = (
+            chart_info.difficulty - chart_stat.fit_difficulty + like_dislike_ratio
+        ) * chart_stat.weight
+
+        query = (
+            chart_info.select(chart_info, chart_stat, song_info)
+            .join(
+                chart_stat,
+                on=(chart_info.song_id == chart_stat.song_id)
+                & (chart_info.level == chart_stat.level),
+            )
+            .join(song_info, on=(chart_info.song_id == song_info.song_id))
+            .join(
+                chart_blacklist,
+                on=(
+                    (chart_info.song_id == chart_blacklist.song_id)
+                    & (chart_info.level == chart_blacklist.level)
+                    & (chart_blacklist.player_id == player_id)
+                ),
+                join_type=JOIN.LEFT_OUTER,
+            )
+            .where(
+                (base_condition & grade_condition)
+                & (chart_blacklist.player_id.is_null())
+                & (~(chart_info.song_id << filtered_song_ids))
+            )
+            .order_by(order_expression.desc())
+            .limit(limit)
+        )
+
+        # 查询结果转换为包含字典的列表
+        result_list = []
+        for record in query:
+            chart_info_dict = model_to_dict(record)
+            chart_stat_dict = model_to_dict(record.chart_stat)
+            song_info_dict = model_to_dict(record.song_id)
+
+            merged_dict = {**chart_info_dict, **chart_stat_dict, **song_info_dict}
+
+            if merged_dict["song_id"] in personal_grades_dict:
+                if (
+                    merged_dict["level"] - 1
+                    != personal_grades_dict[merged_dict["song_id"]]["level_index"]
+                ):
+                    merged_dict["achievement"] = 0
+                else:
+                    merged_dict["achievement"] = personal_grades_dict[
+                        merged_dict["song_id"]
+                    ]["achievements"]
+            else:
+                merged_dict["achievement"] = 0
+
+            result_list.append(merged_dict)
+
+        return result_list, min_score
+
+    if len(charts_score_old) < 35:
+        messages_list.append(
+            {"type": "tips", "text": "目前游玩过的歌曲还不多，再打打再来吧！\n（推荐先游玩自己感兴趣的、喜欢的歌曲哦！）"}
+        )
+        return {
+            "recommend_charts": [],
+            "new_song_min_rating": -1,
+            "old_song_min_rating": -1,
+            "messages": messages_list,
+        }
+    else:
+        old_songs_recommend, old_song_min_score = _query_charts(
+            is_new=False,
+            charts_score=charts_score_old,
+            filtered_song_ids=filtered_old_song_ids,
+        )
+    count_query = song_info.select().where(song_info.is_new == True).count()
+    if count_query < 30 or len(charts_score_new) < 15:
+        new_songs_recommend = []
+        new_song_min_score = -1
+    else:
+        new_songs_recommend, new_song_min_score = _query_charts(
+            is_new=True,
+            charts_score=charts_score_new,
+            filtered_song_ids=filtered_new_song_ids,
+        )
+
+    if len(charts_score_new) < 15:
+        messages_list.append(
+            {"type": "tips", "text": "比起游玩已经更新许久的歌曲，似乎游玩刚刚更新的歌曲推分更有效率哦！"}
+        )
 
     recommend_list = {
-        "recommend_charts": result_list,
-        "min_rating": min_score,
-        "messages": message_list,
+        "recommend_charts": old_songs_recommend + new_songs_recommend
+        if new_songs_recommend
+        else old_songs_recommend,
+        "new_song_min_rating": new_song_min_score,
+        "old_song_min_rating": old_song_min_score,
+        "messages": messages_list,
     }
+    print(
+        [
+            f'{x["song_title"]}({x["level"]},{x["difficulty"]}/{x["achievement"]})'
+            for x in recommend_list["recommend_charts"]
+        ]
+    )
+    print("process time:", time.time() - time1)
     return recommend_list
 
 
 with open("response.json") as f:
     c = json.load(f)
+
+asyncio.run(recommend_charts(c))
