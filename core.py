@@ -1,4 +1,3 @@
-import asyncio
 import decimal
 import json
 from typing import Dict, List, Literal, Tuple
@@ -12,7 +11,9 @@ from pydantic import ValidationError
 from database import (
     chart_blacklist,
     chart_info,
+    chart_record,
     chart_stat,
+    rating_record,
     song_data_version,
     song_info,
 )
@@ -205,14 +206,45 @@ def separate_personal_data(personal_raw_data: List[dict]) -> Tuple[List, List]:
     return list(old_charts), list(new_charts)
 
 
-async def record_player_data(personal_raw_data: List[dict]) -> None:
+async def record_player_data(personal_raw_data: List[dict], player_id: str) -> None:
     # 后台任务
-    pass
+    charts_list = []
+    for charts in personal_raw_data["records"]:
+        charts_list.append(
+            {
+                "player_id": player_id,
+                "song_id": charts["song_id"],
+                "level": charts["level_index"] + 1,
+                "type": 1 if charts["type"] == "SD" else 0,
+                "achievement": charts["achievements"],
+                "rating": charts["ra"],
+                "dxscore": charts["dxScore"],
+                "fc_status": charts["fc"],
+                "fs_status": charts["fs"],
+            }
+        )
+    old_charts, new_charts = separate_personal_data(personal_raw_data)
+    old_charts.sort(key=lambda x: x["ra"], reverse=True)
+    new_charts.sort(key=lambda x: x["ra"], reverse=True)
+    old_rating = 0
+    new_rating = 0
+    for i in old_charts[:35]:
+        old_rating += i["ra"]
+    for i in new_charts[:15]:
+        new_rating += i["ra"]
+    rating_record.replace(
+        {
+            "player_id": player_id,
+            "old_song_rating": old_rating,
+            "new_song_rating": new_rating,
+        }
+    ).execute()
+    chart_record.replace_many(charts_list).execute()
 
 
 async def recommend_charts(
     personal_grades: List[dict],
-    player_id: int,
+    player_id: str,
     grade_type: Literal["new", "old"],
     preferences: dict,
     limit: int = 10,
@@ -319,7 +351,7 @@ async def recommend_charts(
             (base_condition & grade_condition)
             & (chart_blacklist.player_id.is_null())
             & (~(chart_info.song_id << played_song_ids))
-        )  # 添加对已玩过的歌曲的筛选条件
+        )
         .order_by(order_expression.desc())
         .limit(limit)
     )
@@ -347,12 +379,7 @@ async def recommend_charts(
             merged_dict["achievement"] = 0
 
         result_list.append(merged_dict)
-    print(
-        [
-            f'{x["song_title"]}({x["level"]},{x["difficulty"]}/{x["achievement"]})'
-            for x in result_list
-        ]
-    )
+
     recommend_list = {
         "recommend_charts": result_list,
         "min_rating": min_score,
@@ -363,16 +390,3 @@ async def recommend_charts(
 
 with open("response.json") as f:
     c = json.load(f)
-
-try:
-    asyncio.run(
-        recommend_charts(
-            (separate_personal_data(c))[0],
-            0,
-            "new",
-            {"recommend_preferences": "balance", "exclude_played": False},
-        ),
-        debug=True,
-    )
-except Exception as e:
-    print(e)
