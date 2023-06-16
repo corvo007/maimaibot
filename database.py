@@ -92,8 +92,8 @@ class chart_record(BaseDatabase):
     achievement = peewee.DecimalField()
     rating = peewee.IntegerField()
     dxscore = peewee.IntegerField()
-    fc_status = peewee.IntegerField()
-    fs_status = peewee.IntegerField()
+    fc_status = peewee.CharField()
+    fs_status = peewee.CharField()
 
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
