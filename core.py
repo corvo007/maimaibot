@@ -266,28 +266,19 @@ async def recommend_charts(
         filter(lambda x: x["song_id"] not in new_song_id, personal_raw_data)
     )
 
-    personal_grades_filtered_new = new_charts[:30]
-    personal_grades_filtered_old = old_charts[:70]
     charts_score_new = [int(x["ra"]) for x in new_charts[:15]]
     charts_score_old = [int(x["ra"]) for x in old_charts[:35]]
-    filtered_new_song_ids = []
-    filtered_old_song_ids = []
-    for score in personal_grades_filtered_new:
-        if score["achievements"] >= 100.5000:
-            filtered_new_song_ids.append(score["song_id"])
-            continue
-        if preferences.exclude_played:
-            filtered_new_song_ids.append(score["song_id"])
+    filtered_song_ids = []
 
-    for score in personal_grades_filtered_old:
+    for score in personal_raw_data:
         if score["achievements"] >= 100.5000:
-            filtered_old_song_ids.append(score["song_id"])
+            filtered_song_ids.append(score["song_id"])
             continue
-        if preferences.exclude_played:
-            filtered_old_song_ids.append(score["song_id"])
+        if preferences.exclude_played and score["achievements"] >= 94:
+            filtered_song_ids.append(score["song_id"])
+
     personal_grades_dict = {}
-    merged_grades = personal_grades_filtered_new + personal_grades_filtered_old
-    for chart in merged_grades:
+    for chart in personal_raw_data:
         personal_grades_dict[chart["song_id"]] = chart
 
     def _query_charts(is_new: bool, charts_score: list, filtered_song_ids: list):
@@ -302,6 +293,7 @@ async def recommend_charts(
             lower_difficulty = (
                 (min_score + 1) * 100 / 99.50 / song_rating_coefficient[-5][1]
             )
+            minium_achievement = 99.0000
         elif preferences.recommend_preferences == "conservative":
             # min:SS+ Top(99.99%) max:SSS+(100.50%)
             upper_difficulty = (
@@ -310,6 +302,7 @@ async def recommend_charts(
             lower_difficulty = (
                 (min_score + 1) * 100 / 100.50 / song_rating_coefficient[-1][1]
             )
+            minium_achievement = 100.0000
         else:
             # min:S(97.00%) max:S+(98.00%)
             upper_difficulty = (
@@ -318,6 +311,7 @@ async def recommend_charts(
             lower_difficulty = (
                 (min_score + 1) * 100 / 98.00 / song_rating_coefficient[-7][1]
             )
+            minium_achievement = 97.0000
 
         if lower_difficulty > upper_difficulty:
             lower_difficulty, upper_difficulty = upper_difficulty, lower_difficulty
@@ -395,7 +389,7 @@ async def recommend_charts(
 
             result_list.append(merged_dict)
 
-        return result_list, min_score
+        return result_list, min_score, minium_achievement
 
     if len(charts_score_old) < 35:
         messages_list.append(
@@ -408,20 +402,20 @@ async def recommend_charts(
             "messages": messages_list,
         }
     else:
-        old_songs_recommend, old_song_min_score = _query_charts(
+        old_songs_recommend, old_song_min_score, minium_achievement = _query_charts(
             is_new=False,
             charts_score=charts_score_old,
-            filtered_song_ids=filtered_old_song_ids,
+            filtered_song_ids=filtered_song_ids,
         )
     count_query = song_info.select().where(song_info.is_new == True).count()
     if count_query < 30 or len(charts_score_new) < 15:
         new_songs_recommend = []
         new_song_min_score = -1
     else:
-        new_songs_recommend, new_song_min_score = _query_charts(
+        new_songs_recommend, new_song_min_score, minium_achievement = _query_charts(
             is_new=True,
             charts_score=charts_score_new,
-            filtered_song_ids=filtered_new_song_ids,
+            filtered_song_ids=filtered_song_ids,
         )
 
     if len(charts_score_new) < 15:
@@ -435,6 +429,7 @@ async def recommend_charts(
         else old_songs_recommend,
         "new_song_min_rating": new_song_min_score,
         "old_song_min_rating": old_song_min_score,
+        "minium_achievement": minium_achievement,
         "messages": messages_list,
     }
     print(
@@ -443,6 +438,7 @@ async def recommend_charts(
             for x in recommend_list["recommend_charts"]
         ]
     )
+    print(recommend_list)
     print("process time:", time.time() - time1)
     return recommend_list
 
