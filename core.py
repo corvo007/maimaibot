@@ -269,19 +269,19 @@ async def recommend_charts(
     charts_score_new = [int(x["ra"]) for x in new_charts[:15]]
     charts_score_old = [int(x["ra"]) for x in old_charts[:35]]
     filtered_song_ids = []
+    personal_grades_dict = {}
 
     for score in personal_raw_data:
+        personal_grades_dict[(score["song_id"], score["level_index"])] = score
         if score["achievements"] >= 100.5000:
             filtered_song_ids.append(score["song_id"])
             continue
         if preferences.exclude_played and score["achievements"] >= 94:
             filtered_song_ids.append(score["song_id"])
 
-    personal_grades_dict = {}
-    for chart in personal_raw_data:
-        personal_grades_dict[chart["song_id"]] = chart
-
-    def _query_charts(is_new: bool, charts_score: list, filtered_song_ids: list):
+    async def _query_charts(
+        is_new: bool, charts_score: list, filtered_song_ids: list
+    ) -> Tuple[List[dict], int, int]:
         median_score = np.median(charts_score)
         min_score = np.min(charts_score)
         if preferences.recommend_preferences == "balance":
@@ -374,18 +374,14 @@ async def recommend_charts(
 
             merged_dict = {**chart_info_dict, **chart_stat_dict, **song_info_dict}
 
-            if merged_dict["song_id"] in personal_grades_dict:
-                if (
-                    merged_dict["level"] - 1
-                    != personal_grades_dict[merged_dict["song_id"]]["level_index"]
-                ):
-                    merged_dict["achievement"] = 0
-                else:
-                    merged_dict["achievement"] = personal_grades_dict[
-                        merged_dict["song_id"]
-                    ]["achievements"]
-            else:
+            if not (
+                _grade := personal_grades_dict.get(
+                    (merged_dict["song_id"], merged_dict["level"] - 1), None
+                )
+            ):
                 merged_dict["achievement"] = 0
+            else:
+                merged_dict["achievement"] = _grade["achievements"]
 
             result_list.append(merged_dict)
 
@@ -402,7 +398,11 @@ async def recommend_charts(
             "messages": messages_list,
         }
     else:
-        old_songs_recommend, old_song_min_score, minium_achievement = _query_charts(
+        (
+            old_songs_recommend,
+            old_song_min_score,
+            minium_achievement,
+        ) = await _query_charts(
             is_new=False,
             charts_score=charts_score_old,
             filtered_song_ids=filtered_song_ids,
@@ -412,7 +412,11 @@ async def recommend_charts(
         new_songs_recommend = []
         new_song_min_score = -1
     else:
-        new_songs_recommend, new_song_min_score, minium_achievement = _query_charts(
+        (
+            new_songs_recommend,
+            new_song_min_score,
+            minium_achievement,
+        ) = await _query_charts(
             is_new=True,
             charts_score=charts_score_new,
             filtered_song_ids=filtered_song_ids,
