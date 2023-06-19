@@ -25,7 +25,7 @@ async def initialize_database():
                 logger.info(f"Table <{table.__name__}> not exists, will be created.")
         except Exception as e:
             logger.exception(e)
-            logger.critical(f"Error <{e}> encountered while initializing database.")
+            logger.critical(f"Error <{e}> encountered while initializing table <{table.__name__}>.")
     song_database.close()
 
 

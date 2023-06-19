@@ -2,12 +2,11 @@ import asyncio
 import decimal
 import json
 import time
-from typing import List, Tuple
+from typing import List, Literal, Tuple
 
 import httpx
 import numpy as np
 from peewee import JOIN, fn
-from playhouse.shortcuts import model_to_dict
 from pydantic import ValidationError
 
 from database import (
@@ -15,13 +14,14 @@ from database import (
     chart_info,
     chart_record,
     chart_stat,
+    chart_voting,
     rating_record,
     song_data_version,
     song_info,
 )
 from exception import ParameterError
 from log import logger
-from model import player_preferences
+from model import RecommendSongsModel, player_preferences
 
 VERSION_FILE = "https://bucket-1256206908.cos.ap-shanghai.myqcloud.com/update.json"
 STAT_API = "https://www.diving-fish.com/api/maimaidxprober/chart_stats"
@@ -340,7 +340,12 @@ async def recommend_charts(
         ) * chart_stat.weight
 
         query = (
-            chart_info.select(chart_info, chart_stat, song_info)
+            chart_info.select(
+                chart_info,
+                chart_stat,
+                song_info,
+                chart_voting.vote,
+            )
             .join(
                 chart_stat,
                 on=(chart_info.song_id == chart_stat.song_id)
@@ -356,6 +361,15 @@ async def recommend_charts(
                 ),
                 join_type=JOIN.LEFT_OUTER,
             )
+            .join(
+                chart_voting,
+                on=(
+                    (chart_info.song_id == chart_voting.song_id)
+                    & (chart_info.level == chart_voting.level)
+                    & (chart_voting.player_id == player_id)
+                ),
+                join_type=JOIN.LEFT_OUTER,
+            )  # 添加LEFT OUTER JOIN连接chart_voting表
             .where(
                 (base_condition & grade_condition)
                 & (chart_blacklist.player_id.is_null())
@@ -367,12 +381,9 @@ async def recommend_charts(
 
         # 查询结果转换为包含字典的列表
         result_list = []
-        for record in query:
-            chart_info_dict = model_to_dict(record)
-            chart_stat_dict = model_to_dict(record.chart_stat)
-            song_info_dict = model_to_dict(record.song_id)
-
-            merged_dict = {**chart_info_dict, **chart_stat_dict, **song_info_dict}
+        for record in query.objects():
+            
+            merged_dict = RecommendSongsModel.parse_obj(record.__dict__).dict()
 
             if not (
                 _grade := personal_grades_dict.get(
@@ -447,7 +458,20 @@ async def recommend_charts(
     return recommend_list
 
 
+async def operate_blacklist(
+    player_id: str, song_id: int, level: int, operate: Literal["add", "delete"]
+):
+    pass
+
+
+async def set_like(player_id: str, song_id: int, level: int):
+    pass
+
+
 with open("response.json") as f:
     c = json.load(f)
 
-asyncio.run(recommend_charts(c))
+#asyncio.run(recommend_charts(c))
+#asyncio.run(record_player_data(c,"corvo007"))
+#asyncio.run(check_song_update())
+#asyncio.run(run_chart_stat_update())
