@@ -89,7 +89,7 @@ async def check_song_update() -> None:
         remote_version = (await get_song_version())[0]
         remote_data_url = (await get_song_version())[1]
         try:
-            local_version = song_data_version.get_or_none().version
+            local_version = song_data_version.get_or_none(key="version").value
         except Exception as e:
             local_version = -1
     except Exception as e:
@@ -156,7 +156,7 @@ async def run_song_update(data_url: str, new_version: str) -> None:
 
     song_info.replace_many(songs_data).execute()
     chart_info.replace_many(charts_data).execute()
-    song_data_version.replace(version=new_version).execute()
+    song_data_version.replace(key="version", value=new_version).execute()
 
 
 async def run_chart_stat_update() -> None:
@@ -208,7 +208,9 @@ def separate_personal_data(personal_raw_data: List[dict]) -> Tuple[List, List]:
     return list(old_charts), list(new_charts)
 
 
-async def record_player_data(personal_raw_data: List[dict], player_id: str) -> None:
+async def record_player_data(
+    personal_raw_data: List[dict], player_id: str
+) -> None:  # TODO:考虑人工重写，引入pydantic
     # 后台任务
     charts_list = []
     for charts in personal_raw_data["records"]:
@@ -382,9 +384,7 @@ async def recommend_charts(
         # 查询结果转换为包含字典的列表
         result_list = []
         for record in query.objects():
-            
             merged_dict = RecommendSongsModel.parse_obj(record.__dict__).dict()
-
             if not (
                 _grade := personal_grades_dict.get(
                     (merged_dict["song_id"], merged_dict["level"] - 1), None
@@ -471,7 +471,7 @@ async def set_like(player_id: str, song_id: int, level: int):
 with open("response.json") as f:
     c = json.load(f)
 
-#asyncio.run(recommend_charts(c))
-#asyncio.run(record_player_data(c,"corvo007"))
-#asyncio.run(check_song_update())
-#asyncio.run(run_chart_stat_update())
+# asyncio.run(recommend_charts(c))
+# asyncio.run(record_player_data(c,"corvo007"))
+# asyncio.run(check_song_update())
+# asyncio.run(run_chart_stat_update())

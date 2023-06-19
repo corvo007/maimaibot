@@ -47,7 +47,7 @@ class song_info(BaseDatabase):
 
 
 class chart_info(BaseDatabase):
-    song_id = peewee.ForeignKeyField(song_info,on_delete='CASCADE')
+    song_id = peewee.ForeignKeyField(song_info, on_delete="CASCADE")
     level = peewee.IntegerField()  # 1~5分别代表Basic~Re:Master
 
     chart_design = peewee.CharField()  # 谱师
@@ -119,7 +119,8 @@ class rating_record(BaseDatabase):
 
 
 class song_data_version(BaseDatabase):
-    version = peewee.CharField()
+    key = peewee.CharField(primary_key=True)
+    value = peewee.CharField()
 
 
 class chart_voting(BaseDatabase):
@@ -127,6 +128,6 @@ class chart_voting(BaseDatabase):
     song_id = peewee.IntegerField()
     level = peewee.IntegerField()
     vote = peewee.IntegerField()  # 0:like 1:dislike
-    
+
     class Meta:
         primary_key = peewee.CompositeKey("player_id", "song_id", "level")
