@@ -2,11 +2,12 @@ import asyncio
 import decimal
 import json
 import time
-from typing import List, Literal, Tuple
+import traceback
+from typing import List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
-from peewee import JOIN, fn
+from peewee import JOIN, SQL, fn
 from pydantic import ValidationError
 
 from database import (
@@ -21,10 +22,14 @@ from database import (
 )
 from exception import ParameterError
 from log import logger
-from model import RecommendSongsModel, player_preferences
+from model import (
+    AllDiffStatData,
+    BasicChartInfoModel,
+    RecommendChartsModel,
+    player_preferences,
+)
+from const import *
 
-VERSION_FILE = "https://bucket-1256206908.cos.ap-shanghai.myqcloud.com/update.json"
-STAT_API = "https://www.diving-fish.com/api/maimaidxprober/chart_stats"
 
 general_stat = {}
 new_song_id = []
@@ -52,25 +57,6 @@ new_song_id = [
     11507,
     11508,
     11509,
-]
-
-song_rating_coefficient = [
-    [0, 0, "d"],
-    [50, 8, "c"],
-    [60, 9.6, "b"],
-    [70, 11.2, "bb"],
-    [75, 12.0, "bbb"],
-    [80, 13.6, "a"],
-    [90, 15.2, "aa"],
-    [94, 16.8, "aaa"],
-    [97, 20, "s"],
-    [98, 20.3, "sp"],
-    [99, 20.8, "ss"],
-    [99.5, 21.1, "ssp"],
-    [99.9999, 21.4, "ssp"],
-    [100, 21.6, "sss"],
-    [100.4999, 22.2, "sss"],
-    [100.5, 22.4, "sssp"],
 ]
 
 
@@ -126,7 +112,7 @@ async def run_song_update(data_url: str, new_version: str) -> None:
             "version": song["basic_info"]["from"],
             "genre": song["basic_info"]["genre"],
             "is_new": song["basic_info"]["is_new"],
-            "type": 0 if song["type"] == "DX" else 1,
+            "type": DX_CHART if song["type"] == "DX" else STD_CHART,
         }
         if song["basic_info"]["is_new"]:
             new_song_id.append(song["id"])
@@ -172,7 +158,7 @@ async def run_chart_stat_update() -> None:
             f"Error <{e}> encountered while checking update for chart statistics"
         )
         return
-    general_stat = resp["diff_data"]
+    general_stat = AllDiffStatData.parse_obj(resp).dict()
     for k, v in resp["charts"].items():
         for index, chart in enumerate(v):
             if not chart:
@@ -182,23 +168,20 @@ async def run_chart_stat_update() -> None:
                     "song_id": int(k),
                     "level": index + 1,
                     "sample_num": chart["cnt"],
-                    "fit_difficulty": decimal.Decimal(chart["fit_diff"]).quantize(
-                        decimal.Decimal("0.00000")
-                    ),
-                    "avg_achievement": decimal.Decimal(chart["avg"]).quantize(
-                        decimal.Decimal("0.00000")
-                    ),
-                    "avg_dxscore": decimal.Decimal(chart["avg_dx"]).quantize(
-                        decimal.Decimal("0.00000")
-                    ),
-                    "std_dev": decimal.Decimal(chart["std_dev"]).quantize(
-                        decimal.Decimal("0.00000")
-                    ),
+                    "fit_difficulty": round(float(chart["fit_diff"]), ndigits=5),
+                    "avg_achievement": round(float(chart["avg"]), ndigits=5),
+                    "avg_dxscore": round(float(chart["avg_dx"]), ndigits=5),
+                    "std_dev": round(float(chart["std_dev"]), ndigits=5),
                     "achievement_dist": chart["dist"],
                     "fc_dist": chart["fc_dist"],
                 }
             )
     chart_stat.replace_many(chart_stats).execute()
+
+
+"""
+[float(num) for num in chart["dist"].strip("[]").split(",")]
+"""
 
 
 def separate_personal_data(personal_raw_data: List[dict]) -> Tuple[List, List]:
@@ -208,9 +191,7 @@ def separate_personal_data(personal_raw_data: List[dict]) -> Tuple[List, List]:
     return list(old_charts), list(new_charts)
 
 
-async def record_player_data(
-    personal_raw_data: List[dict], player_id: str
-) -> None:  # TODO:考虑人工重写，引入pydantic
+async def record_player_data(personal_raw_data: List[dict], player_id: str) -> None:
     # 后台任务
     charts_list = []
     for charts in personal_raw_data["records"]:
@@ -219,7 +200,7 @@ async def record_player_data(
                 "player_id": player_id,
                 "song_id": charts["song_id"],
                 "level": charts["level_index"] + 1,
-                "type": 1 if charts["type"] == "SD" else 0,
+                "type": STD_CHART if charts["type"] == "SD" else DX_CHART,
                 "achievement": charts["achievements"],
                 "rating": charts["ra"],
                 "dxscore": charts["dxScore"],
@@ -249,9 +230,8 @@ async def record_player_data(
 async def recommend_charts(
     personal_raw_data: dict,
     preferences: dict = None,
-    limit: int = 10,
+    limit: int = 50,
 ) -> dict:
-    time1 = time.time()
     messages_list = []
     if preferences is None:
         preferences = dict()
@@ -343,9 +323,8 @@ async def recommend_charts(
 
         query = (
             chart_info.select(
-                chart_info,
-                chart_stat,
-                song_info,
+                chart_info.song_id,
+                chart_info.level,
                 chart_voting.vote,
             )
             .join(
@@ -384,7 +363,7 @@ async def recommend_charts(
         # 查询结果转换为包含字典的列表
         result_list = []
         for record in query.objects():
-            merged_dict = RecommendSongsModel.parse_obj(record.__dict__).dict()
+            merged_dict = RecommendChartsModel.parse_obj(record.__dict__).dict()
             if not (
                 _grade := personal_grades_dict.get(
                     (merged_dict["song_id"], merged_dict["level"] - 1), None
@@ -419,9 +398,12 @@ async def recommend_charts(
             filtered_song_ids=filtered_song_ids,
         )
     count_query = song_info.select().where(song_info.is_new == True).count()
-    if count_query < 30 or len(charts_score_new) < 15:
+    if count_query < 30:
         new_songs_recommend = []
+        new_song_min_score = np.min(charts_score_new)
+    elif len(charts_score_new) < 15:
         new_song_min_score = -1
+        new_songs_recommend = []
     else:
         (
             new_songs_recommend,
@@ -447,31 +429,114 @@ async def recommend_charts(
         "minium_achievement": minium_achievement,
         "messages": messages_list,
     }
-    print(
-        [
-            f'{x["song_title"]}({x["level"]},{x["difficulty"]}/{x["achievement"]})'
-            for x in recommend_list["recommend_charts"]
-        ]
-    )
-    print(recommend_list)
-    print("process time:", time.time() - time1)
+
     return recommend_list
 
 
 async def operate_blacklist(
-    player_id: str, song_id: int, level: int, operate: Literal["add", "delete"]
+    player_id: str,
+    song_id: int,
+    level: int,
+    operate: Literal["add", "delete"],
+    reason: str,
 ):
+    if operate == "add":
+        chart_blacklist.replace(
+            player_id=player_id, song_id=song_id, level=level, reason=reason
+        ).execute()
+    else:
+        chart_blacklist.delete().where(
+            player_id=player_id, song_id=song_id, level=level
+        ).execute()
+
+
+async def get_blacklist(player_id: str) -> list:
+    return list(chart_blacklist.select().where(player_id == player_id).dicts())
+
+
+async def set_like(player_id: str, song_id: int, level: int) -> None:
+    chart_voting.replace(
+        player_id=player_id, song_id=song_id, level=level, vote=LIKE
+    ).execute()
+
+
+async def set_dislike(player_id: str, song_id: int, level: int) -> None:
+    chart_voting.replace(
+        player_id=player_id, song_id=song_id, level=level, vote=DISLIKE
+    ).execute()
+
+
+async def get_all_level_stat():
+    return general_stat
+
+
+async def get_difficulty_difference(
+    difficulty_range: Optional[list] = None, limit: int = 10
+) -> List[dict]:
+    result = []
+    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
+    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
+    query = (
+        chart_info.select(chart_info.song_id, chart_info.level)
+        .where(chart_info.old_difficulty != -1)
+        .where(
+            (chart_info.difficulty >= min_difficulty)
+            & (chart_info.difficulty <= max_difficulty)
+        )
+        .order_by((chart_info.difficulty - chart_info.old_difficulty).desc())
+        .limit(limit)
+    )
+
+    for chart in query.objects():
+        result.append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
+
+    return result
+
+
+async def get_most_popular_songs():
     pass
 
 
-async def set_like(player_id: str, song_id: int, level: int):
+async def get_relative_easy_songs():
     pass
 
 
-with open("response.json") as f:
-    c = json.load(f)
+async def get_relative_hard_songs():
+    pass
 
-# asyncio.run(recommend_charts(c))
-# asyncio.run(record_player_data(c,"corvo007"))
-# asyncio.run(check_song_update())
-# asyncio.run(run_chart_stat_update())
+
+async def get_biggest_deviation_songs():
+    pass
+
+
+async def get_player_record():
+    pass
+
+
+async def get_basic_info_frontend():
+    query_results = (
+        song_info.select(song_info, chart_info, chart_stat)
+        .join(chart_info, on=(song_info.song_id == chart_info.song_id))
+        .switch(song_info)
+        .join(
+            chart_stat,
+            on=(
+                (song_info.song_id == chart_stat.song_id)
+                & (chart_info.level == chart_stat.level)
+            ),
+        )
+        .dicts()
+    )  # 结果会以字典的格式返回
+
+    result_dict = {}
+
+    for chart in query_results:
+        key = f"{chart['song_id']}-{chart['level']}"  # 将键转换为字符串格式，如 "1-3"
+
+        del chart["song_id"]
+        del chart["level"]
+
+        result_dict[key] = chart
+
+    return result_dict
+
