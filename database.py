@@ -16,6 +16,17 @@ with open(
     os.path.join(os.path.dirname(__file__), "config.json"), "r", encoding="utf-8"
 ) as f:
     config = ConfigModel.parse_obj(json.load(f))
+    
+
+class CustomJSONField(peewee.TextField):
+    def db_value(self, value):
+        """将Python字典转换为JSON字符串"""
+        return json.dumps(value)
+
+    def python_value(self, value):
+        """将JSON字符串转换回Python字典"""
+        return json.loads(value)
+
 
 song_database = RetryMySQLDatabase(
     host=config.MySQL.MySQL_host,
@@ -72,8 +83,8 @@ class chart_stat(BaseDatabase):
     avg_achievement = peewee.DecimalField()
     avg_dxscore = peewee.DecimalField()
     std_dev = peewee.DecimalField()
-    achievement_dist = peewee.CharField()
-    fc_dist = peewee.CharField()
+    achievement_dist = CustomJSONField()
+    fc_dist = CustomJSONField()
 
     like = peewee.IntegerField(default=0)  # 点赞人数
     dislike = peewee.IntegerField(default=0)  # 点踩人数
