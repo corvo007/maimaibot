@@ -1,15 +1,11 @@
-import asyncio
-import decimal
-import json
-import time
-import traceback
 from typing import List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
-from peewee import JOIN, SQL, fn
+from peewee import JOIN, fn
 from pydantic import ValidationError
 
+from const import *
 from database import (
     chart_blacklist,
     chart_info,
@@ -28,8 +24,6 @@ from model import (
     RecommendChartsModel,
     player_preferences,
 )
-from const import *
-
 
 general_stat = {}
 new_song_id = []
@@ -238,7 +232,7 @@ async def recommend_charts(
     try:
         preferences = player_preferences.parse_obj(preferences)
     except ValidationError as e:
-        raise ParameterError(e)
+        raise ParameterError(e)  # TODO:数据验证统一移至api层
     player_id = personal_raw_data["username"]
     personal_raw_data = personal_raw_data["records"]
     personal_raw_data.sort(key=lambda x: x["ra"], reverse=True)
@@ -471,7 +465,7 @@ async def get_all_level_stat():
 
 
 async def get_difficulty_difference(
-    difficulty_range: Optional[list] = None, limit: int = 10
+    difficulty_range: Optional[list] = None, limit: int = 20
 ) -> List[dict]:
     result = []
     difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
@@ -493,24 +487,167 @@ async def get_difficulty_difference(
     return result
 
 
-async def get_most_popular_songs():
-    pass
+async def get_most_popular_songs(
+    difficulty_range: Optional[list] = None,
+    chart_type: Optional[int] = None,
+    genre: Optional[str] = None,
+    version: Optional[str] = None,
+    limit: int = 20,
+):
+    result = []
+    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
+    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
+    query = (
+        chart_info.select(chart_info.song_id, chart_info.level)
+        .join(
+            chart_stat,
+            on=(
+                (chart_info.song_id == chart_stat.song_id)
+                & (chart_info.level == chart_stat.level)
+            ),
+        )
+        .switch(chart_info)
+        .join(song_info, on=(chart_info.song_id == song_info.song_id))
+        .where(
+            (chart_info.difficulty >= min_difficulty)
+            & (chart_info.difficulty <= max_difficulty)
+        )
+    )
+
+    if isinstance(chart_type, int):
+        query = query.where(song_info.type == chart_type)
+
+    if genre:
+        query = query.where(song_info.genre == genre)
+
+    if version:
+        query = query.where(song_info.version == version)
+
+    query = query.order_by(chart_stat.sample_num.desc()).limit(limit)
+
+    for chart in query.objects():
+        result.append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
+    print(result)
+    return result
 
 
-async def get_relative_easy_songs():
-    pass
+async def get_relative_easy_or_hard_songs(
+    difficulty_range: Optional[list] = None, limit: int = 20
+) -> dict:
+    result = {"easy": [], "hard": []}
+    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
+    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
+    basic_query = (
+        chart_info.select(chart_info.song_id, chart_info.level)
+        .join(
+            chart_stat,
+            on=(
+                (chart_info.song_id == chart_stat.song_id)
+                & (chart_info.level == chart_stat.level)
+            ),
+        )
+        .where(
+            (chart_info.difficulty >= min_difficulty)
+            & (chart_info.difficulty <= max_difficulty)
+        )
+        .where(chart_stat.sample_num >= 100)
+    )
+
+    desc_query = basic_query.order_by(
+        (chart_stat.fit_difficulty - chart_info.difficulty).desc()
+    ).limit(limit)
+    asc_query = basic_query.order_by(
+        (chart_stat.fit_difficulty - chart_info.difficulty).asc()
+    ).limit(limit)
+
+    for chart in desc_query.objects():
+        result["hard"].append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
+
+    for chart in asc_query.objects():
+        result["easy"].append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
+
+    return result
 
 
-async def get_relative_hard_songs():
-    pass
+async def get_biggest_deviation_songs(
+    difficulty_range: Optional[list] = None,
+    chart_type: Optional[int] = None,
+    genre: Optional[str] = None,
+    version: Optional[str] = None,
+    limit: int = 20,
+):
+    result = []
+    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
+    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
+    query = (
+        chart_info.select(chart_info.song_id, chart_info.level)
+        .join(
+            chart_stat,
+            on=(
+                (chart_info.song_id == chart_stat.song_id)
+                & (chart_info.level == chart_stat.level)
+            ),
+        )
+        .switch(chart_info)
+        .join(song_info, on=(chart_info.song_id == song_info.song_id))
+        .where(
+            (chart_info.difficulty >= min_difficulty)
+            & (chart_info.difficulty <= max_difficulty)
+        )
+        .where(chart_stat.sample_num >= 100)
+    )
+
+    if isinstance(chart_type, int):
+        query = query.where(song_info.type == chart_type)
+
+    if genre:
+        query = query.where(song_info.genre == genre)
+
+    if version:
+        query = query.where(song_info.version == version)
+
+    query = query.order_by(chart_stat.std_dev.desc()).limit(limit)
+
+    for chart in query.objects():
+        result.append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
+
+    return result
 
 
-async def get_biggest_deviation_songs():
-    pass
+async def get_player_record(player_id: str):
+    # 前端区分新曲/老曲
+    # 如果是从api直接获取数据，那么看不到比最好成绩差的成绩
+    chart_result = {}
+    rating_result = []
+    charts_records = chart_record.select().where(chart_record.player_id == player_id)
+    for r in charts_records:
+        keys = f"{r.song_id}-{r.level}"
+        if keys not in chart_result:
+            chart_result[keys] = []
+        chart_result[keys].append(
+            {
+                "type": r.type,
+                "achievement": float(r.achievement),
+                "rating": r.rating,
+                "dxscore": r.dxscore,
+                "fc_status": r.fc_status,
+                "fs_status": r.fs_status,
+                "record_time": r.record_time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+    rating_records = rating_record.select().where(rating_record.player_id == player_id)
+    for r in rating_records:
+        rating_result.append(
+            {
+                "old_song_rating": r.old_song_rating,
+                "new_song_rating": r.new_song_rating,
+                "record_time": r.record_time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
 
-
-async def get_player_record():
-    pass
+    result = {"rating_records": rating_result, "charts_records": chart_result}
+    print(result)
+    return result
 
 
 async def get_basic_info_frontend():
@@ -539,4 +676,3 @@ async def get_basic_info_frontend():
         result_dict[key] = chart
 
     return result_dict
-
