@@ -31,7 +31,7 @@ class ConfigModel(BaseModel):
     app: AppConfigModel
 
 
-class player_preferences(BaseModel):
+class PlayerPreferencesModel(BaseModel):
     recommend_preferences: Literal["aggressive", "balance", "conservative"] = "balance"
     exclude_played: bool = False
 

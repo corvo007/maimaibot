@@ -24,8 +24,8 @@ from log import logger
 from model import (
     AllDiffStatData,
     BasicChartInfoModel,
+    PlayerPreferencesModel,
     RecommendChartsModel,
-    player_preferences,
 )
 
 general_stat = {}
@@ -293,7 +293,7 @@ async def recommend_charts(
     if preferences is None:
         preferences = dict()
     try:
-        preferences = player_preferences.parse_obj(preferences)
+        preferences = PlayerPreferencesModel.parse_obj(preferences)
     except ValidationError as e:
         raise ParameterError(e)  # TODO:数据验证统一移至api层
     player_id = personal_raw_data["username"]
