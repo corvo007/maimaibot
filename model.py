@@ -20,19 +20,26 @@ class UnicornConfigModel(BaseModel):
     debug: bool
 
 
+class AppConfigModel(BaseModel):
+    developer_token: str
+    secret_key: str
+
+
 class ConfigModel(BaseModel):
     MySQL: DataBaseConfigModel
     unicorn: UnicornConfigModel
+    app: AppConfigModel
 
 
 class player_preferences(BaseModel):
     recommend_preferences: Literal["aggressive", "balance", "conservative"] = "balance"
     exclude_played: bool = False
 
+
 class BasicChartInfoModel(BaseModel):
     song_id: int = None
     level: int = None
-    
+
     @root_validator(pre=True)
     def move_data_to_root(cls, values):
         data = values.pop("__data__", {})

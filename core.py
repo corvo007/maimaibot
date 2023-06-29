@@ -2,6 +2,8 @@ from typing import List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
+import scipy.stats as stats
+from cachetools import TTLCache, cached
 from peewee import JOIN, fn
 from pydantic import ValidationError
 
@@ -12,6 +14,7 @@ from database import (
     chart_record,
     chart_stat,
     chart_voting,
+    config,
     rating_record,
     song_data_version,
     song_info,
@@ -27,6 +30,11 @@ from model import (
 
 general_stat = {}
 new_song_id = []
+basic_info_cache = TTLCache(maxsize=100, ttl=43200)  # 歌曲及谱面基本信息缓存12小时
+stat_cache = TTLCache(maxsize=150, ttl=1800)  # 统计信息缓存30分钟
+player_record_cache = TTLCache(maxsize=250, ttl=30)
+# 缓存30秒(只是为了确保请求token和推荐谱面不重复请求api，还会有Etag做缓存控制)
+best_fit = None  # 拟合模型参数
 
 new_song_id = [
     10146,
@@ -52,6 +60,38 @@ new_song_id = [
     11508,
     11509,
 ]
+
+
+class BestFitDistribution:
+    def __init__(self, data):
+        self.data = data
+        self.distribution, self.params = self._select_best_fit(data)
+
+    def _fit_distributions(self, data):
+        lognorm_params = stats.lognorm.fit(data, floc=0)
+        gamma_params = stats.gamma.fit(data, floc=0)
+        weibull_params = stats.weibull_min.fit(data, floc=0)
+        return lognorm_params, gamma_params, weibull_params
+
+    def _select_best_fit(self, data):
+        distribution_params = self._fit_distributions(data)
+        aics = []
+        distributions = [stats.lognorm, stats.gamma, stats.weibull_min]
+
+        for params, dist in zip(distribution_params, distributions):
+            log_likelihood = np.sum(dist.logpdf(data, *params))
+            k = len(params)
+            aic = 2 * k - 2 * log_likelihood
+            aics.append(aic)
+
+        best_fit_idx = np.argmin(aics)
+        best_fit_params = distribution_params[best_fit_idx]
+        best_fit_distribution = distributions[best_fit_idx]
+        return best_fit_distribution, best_fit_params
+
+    def percentile(self, new_data):
+        percentile = self.distribution.cdf(new_data, *self.params) * 100
+        return percentile
 
 
 async def get_song_version() -> Tuple[str, str]:
@@ -173,11 +213,6 @@ async def run_chart_stat_update() -> None:
     chart_stat.replace_many(chart_stats).execute()
 
 
-"""
-[float(num) for num in chart["dist"].strip("[]").split(",")]
-"""
-
-
 def separate_personal_data(personal_raw_data: List[dict]) -> Tuple[List, List]:
     personal_raw_data = personal_raw_data["records"]
     new_charts = filter(lambda x: x["song_id"] in new_song_id, personal_raw_data)
@@ -219,6 +254,34 @@ async def record_player_data(personal_raw_data: List[dict], player_id: str) -> N
         }
     ).execute()
     chart_record.replace_many(charts_list).execute()
+
+
+@cached(player_record_cache)
+async def get_player_data_from_remote(
+    player_id: Optional[str] = None, bind_qq: Optional[int] = None
+) -> dict:
+    if player_id:
+        params = {player_id: player_id}
+    elif bind_qq:
+        params = {"bind_qq": bind_qq}
+    else:
+        raise ParameterError
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = (
+                await client.post(
+                    PLAYER_DATA_DEV_API,
+                    params=params,
+                    headers={"developer-token": config.app.developer_token},
+                )
+            ).json()
+    except Exception as e:
+        logger.exception(e)
+        logger.critical(
+            f"Error <{e}> encountered while checking update for chart statistics"
+        )
+        raise
+    return resp
 
 
 async def recommend_charts(
@@ -264,28 +327,28 @@ async def recommend_charts(
             # min:SS (99.00%) max:SS+(99.50%)
             # max+min_score ~ min+median_score
             upper_difficulty = (
-                median_score * 100 / 99.00 / song_rating_coefficient[-6][1]
+                median_score * 100 / 99.00 / SONG_RATING_COEFFICIENT[-6][1]
             )
             lower_difficulty = (
-                (min_score + 1) * 100 / 99.50 / song_rating_coefficient[-5][1]
+                (min_score + 1) * 100 / 99.50 / SONG_RATING_COEFFICIENT[-5][1]
             )
             minium_achievement = 99.0000
         elif preferences.recommend_preferences == "conservative":
             # min:SS+ Top(99.99%) max:SSS+(100.50%)
             upper_difficulty = (
-                median_score * 100 / 99.99 / song_rating_coefficient[-4][1]
+                median_score * 100 / 99.99 / SONG_RATING_COEFFICIENT[-4][1]
             )
             lower_difficulty = (
-                (min_score + 1) * 100 / 100.50 / song_rating_coefficient[-1][1]
+                (min_score + 1) * 100 / 100.50 / SONG_RATING_COEFFICIENT[-1][1]
             )
             minium_achievement = 100.0000
         else:
             # min:S(97.00%) max:S+(98.00%)
             upper_difficulty = (
-                median_score * 100 / 97.00 / song_rating_coefficient[-8][1]
+                median_score * 100 / 97.00 / SONG_RATING_COEFFICIENT[-8][1]
             )
             lower_difficulty = (
-                (min_score + 1) * 100 / 98.00 / song_rating_coefficient[-7][1]
+                (min_score + 1) * 100 / 98.00 / SONG_RATING_COEFFICIENT[-7][1]
             )
             minium_achievement = 97.0000
 
@@ -464,6 +527,7 @@ async def get_all_level_stat():
     return general_stat
 
 
+@cached(stat_cache)
 async def get_difficulty_difference(
     difficulty_range: Optional[list] = None, limit: int = 20
 ) -> List[dict]:
@@ -487,6 +551,7 @@ async def get_difficulty_difference(
     return result
 
 
+@cached(stat_cache)
 async def get_most_popular_songs(
     difficulty_range: Optional[list] = None,
     chart_type: Optional[int] = None,
@@ -531,6 +596,7 @@ async def get_most_popular_songs(
     return result
 
 
+@cached(stat_cache)
 async def get_relative_easy_or_hard_songs(
     difficulty_range: Optional[list] = None, limit: int = 20
 ) -> dict:
@@ -569,6 +635,7 @@ async def get_relative_easy_or_hard_songs(
     return result
 
 
+@cached(stat_cache)
 async def get_biggest_deviation_songs(
     difficulty_range: Optional[list] = None,
     chart_type: Optional[int] = None,
@@ -619,7 +686,11 @@ async def get_player_record(player_id: str):
     # 如果是从api直接获取数据，那么看不到比最好成绩差的成绩
     chart_result = {}
     rating_result = []
-    charts_records = chart_record.select().where(chart_record.player_id == player_id)
+    charts_records = (
+        chart_record.select()
+        .where(chart_record.player_id == player_id)
+        .order_by(chart_record.record_time.desc())
+    )
     for r in charts_records:
         keys = f"{r.song_id}-{r.level}"
         if keys not in chart_result:
@@ -635,7 +706,11 @@ async def get_player_record(player_id: str):
                 "record_time": r.record_time.strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
-    rating_records = rating_record.select().where(rating_record.player_id == player_id)
+    rating_records = (
+        rating_record.select()
+        .where(rating_record.player_id == player_id)
+        .order_by(rating_record.record_time.desc())
+    )
     for r in rating_records:
         rating_result.append(
             {
@@ -644,12 +719,26 @@ async def get_player_record(player_id: str):
                 "record_time": r.record_time.strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
-
-    result = {"rating_records": rating_result, "charts_records": chart_result}
+    if len(rating_result) >= 1:
+        rating_percentile = round(
+            await get_player_percentile(
+                rating_result[0]["old_song_rating"]
+                + rating_result[0]["new_song_rating"]
+            ),
+            2,
+        )
+    else:
+        rating_percentile = "N/A"
+    result = {
+        "rating_records": rating_result,
+        "charts_records": chart_result,
+        "rating_percentile": rating_percentile if rating_percentile else "N/A",
+    }
     print(result)
     return result
 
 
+@cached(basic_info_cache)
 async def get_basic_info_frontend():
     query_results = (
         song_info.select(song_info, chart_info, chart_stat)
@@ -676,3 +765,28 @@ async def get_basic_info_frontend():
         result_dict[key] = chart
 
     return result_dict
+
+
+async def update_public_player_rating() -> None:
+    global best_fit
+    logger.info("updating player ranking")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = (await client.get(PLAYER_RANKING_API)).json()
+    except Exception as e:
+        logger.exception(e)
+        logger.critical(
+            f"Error <{e}> encountered while checking update for chart statistics"
+        )
+        return
+    data = []
+    for i in resp:
+        data.append(i["ra"])
+    best_fit = BestFitDistribution(data)
+
+
+async def get_player_percentile(player_rating: int) -> Optional[float]:
+    if hasattr(best_fit, "percentile"):
+        return best_fit.percentile(player_rating)
+    else:
+        return None

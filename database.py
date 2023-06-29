@@ -16,7 +16,7 @@ with open(
     os.path.join(os.path.dirname(__file__), "config.json"), "r", encoding="utf-8"
 ) as f:
     config = ConfigModel.parse_obj(json.load(f))
-    
+
 
 class CustomJSONField(peewee.TextField):
     def db_value(self, value):

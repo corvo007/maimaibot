@@ -1,4 +1,4 @@
-song_rating_coefficient = [
+SONG_RATING_COEFFICIENT = [
     [0, 0, "d"],
     [50, 8, "c"],
     [60, 9.6, "b"],
@@ -18,10 +18,13 @@ song_rating_coefficient = [
 ]
 VERSION_FILE = "https://bucket-1256206908.cos.ap-shanghai.myqcloud.com/update.json"
 STAT_API = "https://www.diving-fish.com/api/maimaidxprober/chart_stats"
+PLAYER_DATA_DEV_API = (
+    "https://www.diving-fish.com/api/maimaidxprober/dev/player/records"
+)
+PLAYER_RANKING_API = "https://www.diving-fish.com/api/maimaidxprober/rating_ranking"
 
 DX_CHART = 0
 STD_CHART = 1
 
 LIKE = 0
 DISLIKE = 1
-

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from database import BaseDatabase, config, song_database
 from log import logger
-from core import check_song_update, run_chart_stat_update
+from core import check_song_update, run_chart_stat_update, update_public_player_rating
 
 app = FastAPI(title="maibot")
 scheduler = AsyncIOScheduler()
@@ -36,6 +36,31 @@ async def check_update_on_startup() -> None:
     await asyncio.sleep(15)
     await check_song_update()
     await run_chart_stat_update()
+    await update_public_player_rating()
+
+
+@app.on_event("startup")
+async def check_update_regularly() -> None:
+    scheduler.add_job(
+        check_song_update, "interval", hours=12, max_instances=1, misfire_grace_time=10
+    )
+    # 谱面/歌曲信息12小时检查更新一次
+    scheduler.add_job(
+        run_chart_stat_update,
+        "interval",
+        minutes=30,
+        max_instances=1,
+        misfire_grace_time=10,
+    )  # 谱面/歌曲统计30分钟更新一次
+    scheduler.add_job(
+        update_public_player_rating,
+        "interval",
+        hours=12,
+        max_instances=1,
+        misfire_grace_time=10,
+    )
+    await asyncio.sleep(60)
+    scheduler.start()
 
 
 if __name__ == "__main__":
