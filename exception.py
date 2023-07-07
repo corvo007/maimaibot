@@ -18,6 +18,6 @@ class NoSuchPlayerError(Error):
         self.message = message
 
 
-class InvaildTokenError(Error):
+class InvalidTokenError(Error):
     def __init__(self, message: str = "凭证无效"):
         self.message = message
