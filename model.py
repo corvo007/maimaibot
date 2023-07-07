@@ -53,11 +53,25 @@ class RecommendChartsModel(BasicChartInfoModel):
     vote: Optional[Literal[LIKE, DISLIKE, None]] = None
 
 
-class DiffStatData(BaseModel):
+class DiffStatDataModel(BaseModel):
     achievements: float
     dist: List[float]
     fc_dist: List[float]
 
 
-class AllDiffStatData(BaseModel):
-    diff_data: Dict[str, DiffStatData]
+class AllDiffStatDataModel(BaseModel):
+    diff_data: Dict[str, DiffStatDataModel]
+
+
+class TokenDataModel(BaseModel):
+    username: Optional[str] = None
+
+
+class TokenModel(BaseModel):
+    access_token: str
+    token_type: str
+
+class GeneralResponseModel(BaseModel):
+    code:Optional[int]=0
+    data:Optional[dict]=dict()
+    message:Optional[str]=""
