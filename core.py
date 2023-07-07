@@ -1,3 +1,4 @@
+import json
 from typing import List, Literal, Optional, Tuple
 
 import httpx
@@ -5,7 +6,6 @@ import numpy as np
 import scipy.stats as stats
 from cachetools import TTLCache, cached
 from peewee import JOIN, fn
-from pydantic import ValidationError
 
 from const import *
 from database import (
@@ -14,7 +14,6 @@ from database import (
     chart_record,
     chart_stat,
     chart_voting,
-    config,
     rating_record,
     song_data_version,
     song_info,
@@ -22,7 +21,7 @@ from database import (
 from exception import ParameterError
 from log import logger
 from model import (
-    AllDiffStatData,
+    AllDiffStatDataModel,
     BasicChartInfoModel,
     PlayerPreferencesModel,
     RecommendChartsModel,
@@ -32,8 +31,8 @@ general_stat = {}
 new_song_id = []
 basic_info_cache = TTLCache(maxsize=100, ttl=43200)  # 歌曲及谱面基本信息缓存12小时
 stat_cache = TTLCache(maxsize=150, ttl=1800)  # 统计信息缓存30分钟
-player_record_cache = TTLCache(maxsize=250, ttl=30)
-# 缓存30秒(只是为了确保请求token和推荐谱面不重复请求api，还会有Etag做缓存控制)
+player_record_cache = TTLCache(maxsize=250, ttl=180)
+# 缓存180秒(只是为了确保请求token和推荐谱面不重复请求api，还会有Etag做缓存控制)
 best_fit = None  # 拟合模型参数
 
 new_song_id = [
@@ -192,7 +191,7 @@ async def run_chart_stat_update() -> None:
             f"Error <{e}> encountered while checking update for chart statistics"
         )
         return
-    general_stat = AllDiffStatData.parse_obj(resp).dict()
+    general_stat = AllDiffStatDataModel.parse_obj(resp).dict()
     for k, v in resp["charts"].items():
         for index, chart in enumerate(v):
             if not chart:
@@ -266,36 +265,30 @@ async def get_player_data_from_remote(
         params = {"bind_qq": bind_qq}
     else:
         raise ParameterError
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = (
-                await client.post(
-                    PLAYER_DATA_DEV_API,
-                    params=params,
-                    headers={"developer-token": config.app.developer_token},
-                )
-            ).json()
-    except Exception as e:
-        logger.exception(e)
-        logger.critical(
-            f"Error <{e}> encountered while checking update for chart statistics"
+    # TODO: remove debug code
+    with open("response.json") as f:
+        return json.load(f)
+    """async with httpx.AsyncClient(timeout=10) as client:
+        resp = (
+            await client.post(
+                PLAYER_DATA_DEV_API,
+                params=params,
+                headers={"developer-token": config.app.developer_token},
+            )
         )
-        raise
-    return resp
+        if resp.status_code == 400:
+            raise NoSuchPlayerError
+    return resp.json()"""
 
 
 async def recommend_charts(
     personal_raw_data: dict,
-    preferences: dict = None,
+    preferences: PlayerPreferencesModel = None,
     limit: int = 50,
 ) -> dict:
     messages_list = []
     if preferences is None:
-        preferences = dict()
-    try:
-        preferences = PlayerPreferencesModel.parse_obj(preferences)
-    except ValidationError as e:
-        raise ParameterError(e)  # TODO:数据验证统一移至api层
+        preferences = PlayerPreferencesModel.parse_obj(dict())
     player_id = personal_raw_data["username"]
     personal_raw_data = personal_raw_data["records"]
     personal_raw_data.sort(key=lambda x: x["ra"], reverse=True)
@@ -413,6 +406,7 @@ async def recommend_charts(
                 & (chart_blacklist.player_id.is_null())
                 & (~(chart_info.song_id << filtered_song_ids))
             )
+            .where(chart_stat.sample_num >= 100)
             .order_by(order_expression.desc())
             .limit(limit)
         )
@@ -592,7 +586,7 @@ async def get_most_popular_songs(
 
     for chart in query.objects():
         result.append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
-    print(result)
+
     return result
 
 
@@ -734,7 +728,7 @@ async def get_player_record(player_id: str):
         "charts_records": chart_result,
         "rating_percentile": rating_percentile if rating_percentile else "N/A",
     }
-    print(result)
+
     return result
 
 
