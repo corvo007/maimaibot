@@ -71,7 +71,8 @@ class TokenModel(BaseModel):
     access_token: str
     token_type: str
 
+
 class GeneralResponseModel(BaseModel):
-    code:Optional[int]=0
-    data:Optional[dict]=dict()
-    message:Optional[str]=""
+    code: Optional[int] = 0
+    data: Optional[dict] = dict()
+    message: Optional[str] = ""
