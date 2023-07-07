@@ -75,4 +75,4 @@ class TokenModel(BaseModel):
 class GeneralResponseModel(BaseModel):
     code: Optional[int] = 0
     data: Optional[dict] = dict()
-    message: Optional[str] = ""
+    message: Optional[str] = "ok"
