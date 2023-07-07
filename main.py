@@ -5,10 +5,18 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 
 from database import BaseDatabase, config, song_database
+from endpoint import ETagMiddleware, router
 from log import logger
-from core import check_song_update, run_chart_stat_update, update_public_player_rating
+from core import (
+    check_song_update,
+    check_update_on_startup,
+    run_chart_stat_update,
+    update_public_player_rating,
+)
 
 app = FastAPI(title="maibot")
+app.include_router(router)
+app.add_middleware(ETagMiddleware)
 scheduler = AsyncIOScheduler()
 
 
@@ -32,11 +40,8 @@ async def initialize_database():
 
 
 @app.on_event("startup")
-async def check_update_on_startup() -> None:
-    await asyncio.sleep(15)
-    await check_song_update()
-    await run_chart_stat_update()
-    await update_public_player_rating()
+async def _check_update_on_startup() -> None:
+    asyncio.create_task(check_update_on_startup())
 
 
 @app.on_event("startup")
@@ -59,7 +64,6 @@ async def check_update_regularly() -> None:
         max_instances=1,
         misfire_grace_time=10,
     )
-    await asyncio.sleep(60)
     scheduler.start()
 
 
