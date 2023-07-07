@@ -83,9 +83,9 @@ class GetDiffInputModel(BaseModel):
     lower_difficulty: Optional[float] = Field(1.0, ge=1.0, le=15.0)
     limit: Optional[int] = Field(20, gt=0)
 
-    @validator('lower_difficulty', pre=True, always=True)
+    @validator("lower_difficulty", pre=True, always=True)
     def lower_can_not_exceed_upper(cls, v, values, **kwargs):
-        upper = values.get('upper_difficulty')
+        upper = values.get("upper_difficulty")
         if upper is not None and v > upper:
-            raise ValueError('lower_difficulty can\'t be greater than upper_difficulty')
+            raise ValueError("lower_difficulty can't be greater than upper_difficulty")
         return v

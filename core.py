@@ -6,7 +6,7 @@ from typing import List, Literal, Optional, Tuple
 import httpx
 import numpy as np
 import scipy.stats as stats
-from cachetools import TTLCache, cached
+from cachetools import TTLCache
 from peewee import JOIN, fn
 
 from const import *

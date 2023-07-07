@@ -4,15 +4,15 @@ import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 
-from database import BaseDatabase, config, song_database
-from endpoint import ETagMiddleware, router
-from log import logger
 from core import (
     check_song_update,
     check_update_on_startup,
     run_chart_stat_update,
     update_public_player_rating,
 )
+from database import BaseDatabase, config, song_database
+from endpoint import ETagMiddleware, router
+from log import logger
 
 app = FastAPI(title="maibot")
 app.include_router(router)
@@ -70,8 +70,9 @@ async def check_update_regularly() -> None:
 if __name__ == "__main__":
     uvicorn.run(
         app="main:app",
-        host=config.unicorn.bind_address,
+        host=str(config.unicorn.bind_address),
         port=config.unicorn.bind_port,
         reload=config.unicorn.reload,
         debug=config.unicorn.debug,
+        log_level="debug"
     )
