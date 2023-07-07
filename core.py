@@ -1,4 +1,6 @@
+import asyncio
 import json
+from functools import wraps
 from typing import List, Literal, Optional, Tuple
 
 import httpx
@@ -29,10 +31,6 @@ from model import (
 
 general_stat = {}
 new_song_id = []
-basic_info_cache = TTLCache(maxsize=100, ttl=43200)  # 歌曲及谱面基本信息缓存12小时
-stat_cache = TTLCache(maxsize=150, ttl=1800)  # 统计信息缓存30分钟
-player_record_cache = TTLCache(maxsize=250, ttl=180)
-# 缓存180秒(只是为了确保请求token和推荐谱面不重复请求api，还会有Etag做缓存控制)
 best_fit = None  # 拟合模型参数
 
 new_song_id = [
@@ -91,6 +89,49 @@ class BestFitDistribution:
     def percentile(self, new_data):
         percentile = self.distribution.cdf(new_data, *self.params) * 100
         return percentile
+
+
+class AsyncTTLCache(TTLCache):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lock = asyncio.Lock()
+
+    async def get(self, key):
+        async with self._lock:
+            return super().get(key)
+
+    async def pop(self, key):
+        async with self._lock:
+            return super().pop(key)
+
+    async def set(self, key, value):
+        async with self._lock:
+            super().__setitem__(key, value)
+
+
+def async_ttl_cache(cache):
+    def decorator(func):
+        @wraps(func)
+        async def wrapped(*args, **kwargs):
+            serialized_args = json.dumps(args, sort_keys=True)
+            serialized_kwargs = json.dumps(kwargs, sort_keys=True)
+            key = (serialized_args, serialized_kwargs)
+            if await cache.get(key) is None:
+                value = await func(*args, **kwargs)
+                await cache.set(key, value)
+            else:
+                value = await cache.get(key)
+            return value
+
+        return wrapped
+
+    return decorator
+
+
+basic_info_cache = AsyncTTLCache(maxsize=100, ttl=43200)  # 歌曲及谱面基本信息缓存12小时
+stat_cache = AsyncTTLCache(maxsize=150, ttl=1800)  # 统计信息缓存30分钟
+player_record_cache = AsyncTTLCache(maxsize=250, ttl=180)
+# 缓存180秒(只是为了确保请求token和推荐谱面不重复请求api，还会有Etag做缓存控制)
 
 
 async def get_song_version() -> Tuple[str, str]:
@@ -255,7 +296,7 @@ async def record_player_data(personal_raw_data: List[dict], player_id: str) -> N
     chart_record.replace_many(charts_list).execute()
 
 
-@cached(player_record_cache)
+@async_ttl_cache(player_record_cache)
 async def get_player_data_from_remote(
     player_id: Optional[str] = None, bind_qq: Optional[int] = None
 ) -> dict:
@@ -521,7 +562,7 @@ async def get_all_level_stat():
     return general_stat
 
 
-@cached(stat_cache)
+@async_ttl_cache(stat_cache)
 async def get_difficulty_difference(
     difficulty_range: Optional[list] = None, limit: int = 20
 ) -> List[dict]:
@@ -545,7 +586,7 @@ async def get_difficulty_difference(
     return result
 
 
-@cached(stat_cache)
+@async_ttl_cache(stat_cache)
 async def get_most_popular_songs(
     difficulty_range: Optional[list] = None,
     chart_type: Optional[int] = None,
@@ -590,7 +631,7 @@ async def get_most_popular_songs(
     return result
 
 
-@cached(stat_cache)
+@async_ttl_cache(stat_cache)
 async def get_relative_easy_or_hard_songs(
     difficulty_range: Optional[list] = None, limit: int = 20
 ) -> dict:
@@ -629,7 +670,7 @@ async def get_relative_easy_or_hard_songs(
     return result
 
 
-@cached(stat_cache)
+@async_ttl_cache(stat_cache)
 async def get_biggest_deviation_songs(
     difficulty_range: Optional[list] = None,
     chart_type: Optional[int] = None,
@@ -732,7 +773,7 @@ async def get_player_record(player_id: str):
     return result
 
 
-@cached(basic_info_cache)
+@async_ttl_cache(basic_info_cache)
 async def get_basic_info_frontend():
     query_results = (
         song_info.select(song_info, chart_info, chart_stat)
@@ -784,3 +825,10 @@ async def get_player_percentile(player_rating: int) -> Optional[float]:
         return best_fit.percentile(player_rating)
     else:
         return None
+
+
+async def check_update_on_startup() -> None:
+    await asyncio.sleep(25)
+    await check_song_update()
+    await run_chart_stat_update()
+    await update_public_player_rating()
