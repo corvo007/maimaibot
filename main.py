@@ -74,5 +74,5 @@ if __name__ == "__main__":
         port=config.unicorn.bind_port,
         reload=config.unicorn.reload,
         debug=config.unicorn.debug,
-        log_level="debug"
+        log_level="debug",
     )
