@@ -564,17 +564,17 @@ async def get_all_level_stat():
 
 @async_ttl_cache(stat_cache)
 async def get_difficulty_difference(
-    difficulty_range: Optional[list] = None, limit: int = 20
+    upper_difficulty: Optional[float] = 15.0,
+    lower_difficulty: Optional[float] = 11.0,
+    limit: int = 20,
 ) -> List[dict]:
     result = []
-    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
-    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
     query = (
         chart_info.select(chart_info.song_id, chart_info.level)
         .where(chart_info.old_difficulty != -1)
         .where(
-            (chart_info.difficulty >= min_difficulty)
-            & (chart_info.difficulty <= max_difficulty)
+            (chart_info.difficulty >= lower_difficulty)
+            & (chart_info.difficulty <= upper_difficulty)
         )
         .order_by((chart_info.difficulty - chart_info.old_difficulty).desc())
         .limit(limit)
@@ -588,15 +588,14 @@ async def get_difficulty_difference(
 
 @async_ttl_cache(stat_cache)
 async def get_most_popular_songs(
-    difficulty_range: Optional[list] = None,
+    upper_difficulty: Optional[float] = 15.0,
+    lower_difficulty: Optional[float] = 11.0,
     chart_type: Optional[int] = None,
     genre: Optional[str] = None,
     version: Optional[str] = None,
     limit: int = 20,
 ):
     result = []
-    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
-    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
     query = (
         chart_info.select(chart_info.song_id, chart_info.level)
         .join(
@@ -609,8 +608,8 @@ async def get_most_popular_songs(
         .switch(chart_info)
         .join(song_info, on=(chart_info.song_id == song_info.song_id))
         .where(
-            (chart_info.difficulty >= min_difficulty)
-            & (chart_info.difficulty <= max_difficulty)
+            (chart_info.difficulty >= lower_difficulty)
+            & (chart_info.difficulty <= upper_difficulty)
         )
     )
 
@@ -633,11 +632,11 @@ async def get_most_popular_songs(
 
 @async_ttl_cache(stat_cache)
 async def get_relative_easy_or_hard_songs(
-    difficulty_range: Optional[list] = None, limit: int = 20
+    upper_difficulty: Optional[float] = 15.0,
+    lower_difficulty: Optional[float] = 11.0,
+    limit: int = 20,
 ) -> dict:
     result = {"easy": [], "hard": []}
-    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
-    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
     basic_query = (
         chart_info.select(chart_info.song_id, chart_info.level)
         .join(
@@ -648,8 +647,8 @@ async def get_relative_easy_or_hard_songs(
             ),
         )
         .where(
-            (chart_info.difficulty >= min_difficulty)
-            & (chart_info.difficulty <= max_difficulty)
+            (chart_info.difficulty >= lower_difficulty)
+            & (chart_info.difficulty <= upper_difficulty)
         )
         .where(chart_stat.sample_num >= 100)
     )
@@ -672,15 +671,14 @@ async def get_relative_easy_or_hard_songs(
 
 @async_ttl_cache(stat_cache)
 async def get_biggest_deviation_songs(
-    difficulty_range: Optional[list] = None,
+    upper_difficulty: Optional[float] = 15.0,
+    lower_difficulty: Optional[float] = 11.0,
     chart_type: Optional[int] = None,
     genre: Optional[str] = None,
     version: Optional[str] = None,
     limit: int = 20,
 ):
     result = []
-    difficulty_range = [11.0, 15.0] if not difficulty_range else difficulty_range
-    min_difficulty, max_difficulty = min(difficulty_range), max(difficulty_range)
     query = (
         chart_info.select(chart_info.song_id, chart_info.level)
         .join(
@@ -693,8 +691,8 @@ async def get_biggest_deviation_songs(
         .switch(chart_info)
         .join(song_info, on=(chart_info.song_id == song_info.song_id))
         .where(
-            (chart_info.difficulty >= min_difficulty)
-            & (chart_info.difficulty <= max_difficulty)
+            (chart_info.difficulty >= lower_difficulty)
+            & (chart_info.difficulty <= upper_difficulty)
         )
         .where(chart_stat.sample_num >= 100)
     )
