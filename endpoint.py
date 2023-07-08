@@ -1,12 +1,12 @@
 import hashlib
 from typing import Awaitable, Callable
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response, StreamingResponse
 
-from core import get_basic_info_frontend
-from model import GeneralResponseModel
+from core import *
+from model import CompFilterModel, FilterModel, GeneralResponseModel
 
 router = APIRouter(prefix="/api/v1/maimai")
 
@@ -16,6 +16,11 @@ async def async_generator(body):
 
 
 class ETagMiddleware(BaseHTTPMiddleware):
+    exclude_paths = [
+        "/login",
+        "/another_path",
+    ]  # add paths that you want to exclude here
+
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ):
@@ -24,11 +29,15 @@ class ETagMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Check if the requested path should be excluded
-        if request.url.path.startswith("/login"):
+        if request.url.path in self.exclude_paths:
             return await call_next(request)
 
         # First, let's call the real route handler
         real_response = await call_next(request)
+
+        # Check if the response is not 200
+        if real_response.status_code != 200:
+            return real_response
 
         if isinstance(real_response, StreamingResponse):
             body = b"".join([part async for part in real_response.body_iterator])
