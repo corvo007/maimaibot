@@ -78,14 +78,35 @@ class GeneralResponseModel(BaseModel):
     message: Optional[str] = "ok"
 
 
-class GetDiffInputModel(BaseModel):
+class FilterModel(BaseModel):
     upper_difficulty: Optional[float] = Field(15.0, ge=1.0, le=15.0)
     lower_difficulty: Optional[float] = Field(1.0, ge=1.0, le=15.0)
     limit: Optional[int] = Field(20, gt=0)
 
     @validator("lower_difficulty", pre=True, always=True)
-    def lower_can_not_exceed_upper(cls, v, values, **kwargs):
+    def lower_can_not_exceed_upper(cls, v, values):
         upper = values.get("upper_difficulty")
         if upper is not None and v > upper:
             raise ValueError("lower_difficulty can't be greater than upper_difficulty")
         return v
+
+
+class CompFilterModel(FilterModel):
+    chart_type: Optional[int] = None
+    genre: Optional[str] = None
+    version: Optional[str] = None
+
+    @validator("chart_type")
+    def convert_chart_type(cls, v):
+        if v is not None and v not in [DX_CHART, STD_CHART]:
+            raise ValueError("Invalid chart type")
+
+    @validator("version")
+    def check_version(cls, v):
+        if v is not None and v not in MAIMAI_VERSION:
+            raise ValueError("Invalid maimai version")
+
+    @validator("genre")
+    def check_genre(cls, v):
+        if v is not None and v not in SONG_GENRE:
+            raise ValueError("Invalid song genre")
