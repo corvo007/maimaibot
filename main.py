@@ -2,7 +2,10 @@ import asyncio
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
+from starlette.responses import JSONResponse
 
 from core import (
     check_song_update,
@@ -11,11 +14,12 @@ from core import (
     update_public_player_rating,
 )
 from database import BaseDatabase, config, song_database
-from endpoint import ETagMiddleware, router
+from endpoint import ETagMiddleware, charts_router
+from exception import *
 from log import logger
 
 app = FastAPI(title="maibot")
-app.include_router(router)
+app.include_router(charts_router)
 app.add_middleware(ETagMiddleware)
 scheduler = AsyncIOScheduler()
 
@@ -65,6 +69,70 @@ async def check_update_regularly() -> None:
         misfire_grace_time=10,
     )
     scheduler.start()
+
+
+@app.exception_handler(NoSuchPlayerError)
+@app.exception_handler(404)
+async def _handle_404(request: Request, exc: Exception):
+    error_msg = (
+        "未找到玩家信息，请确认输入是否正确。"
+        if isinstance(exc, NoSuchPlayerError)
+        else f"未找到你所请求的网页。\n请求URL：{request.url}"
+    )
+    return JSONResponse(
+        status_code=404,
+        content={"code": -404, "data": {}, "message": error_msg},
+        media_type="application/json",
+    )
+
+
+@app.exception_handler(InvalidTokenError)
+@app.exception_handler(401)
+async def _handle_401(request: Request, exc: Exception):
+    if hasattr(exc, "message"):
+        error_msg = f"{exc.message}\n请求URL：{request.url}"
+    else:
+        error_msg = f"凭证无效。\n请求URL：{request.url}"
+    return JSONResponse(
+        status_code=401,
+        content={"code": -401, "data": {}, "message": error_msg},
+        media_type="application/json",
+    )
+
+
+@app.exception_handler(500)
+async def _handle_500(request: Request, exc: Exception):
+    logger.exception(exc)
+    return JSONResponse(
+        status_code=500,
+        content={"code": -500, "data": {}, "message": f"发生了内部错误。\n请求URL：{request.url}"},
+        media_type="application/json",
+        background=logger.exception(exc),
+    )
+
+
+@app.exception_handler(ValidationError)
+@app.exception_handler(ParameterError)
+@app.exception_handler(RequestValidationError)
+async def _handle_422(request: Request, exc: Exception):
+    if hasattr(exc, "errors"):
+        error_msg = ""
+        for i in exc.errors():
+            error_msg += f'{i["msg"]}\n'
+    elif hasattr(exc, "message"):
+        error_msg = exc.message
+    else:
+        error_msg = ""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "code": -422,
+            "data": {},
+            "message": f"查询参数无效。\n请求URL：{request.url} \n详情:{error_msg}",
+        },
+        media_type="application/json",
+        background=logger.error(exc),
+    )
 
 
 if __name__ == "__main__":
