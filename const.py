@@ -28,3 +28,32 @@ STD_CHART = 1
 
 LIKE = 0
 DISLIKE = 1
+
+MAIMAI_VERSION = [
+    "maimai",
+    "maimai PLUS",
+    "maimai GreeN",
+    "maimai GreeN PLUS",
+    "maimai ORANGE",
+    "maimai ORANGE PLUS",
+    "maimai PiNK",
+    "maimai PiNK PLUS",
+    "maimai MURASAKi",
+    "maimai MURASAKi PLUS",
+    "maimai MiLK",
+    "maimai MiLK PLUS",
+    "maimai FiNALE",
+    "maimai でらっくす",
+    "maimai でらっくす Splash",
+    "maimai でらっくす UNiVERSE",
+    "maimai でらっくす FESTiVAL",
+]
+
+SONG_GENRE = [
+    "東方Project",
+    "ゲームバラエティ",
+    "オンゲキCHUNITHM",
+    "POPSアニメ",
+    "niconicoボーカロイド",
+    "maimai",
+]
