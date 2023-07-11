@@ -1,5 +1,8 @@
 import asyncio
 import json
+import time
+import traceback
+import uuid
 from functools import wraps
 from typing import List, Literal, Optional, Tuple
 
@@ -11,14 +14,14 @@ from peewee import JOIN, fn
 
 from const import *
 from database import (
-    chart_blacklist,
-    chart_info,
-    chart_record,
-    chart_stat,
-    chart_voting,
-    rating_record,
-    song_data_version,
-    song_info,
+    ChartBlacklist,
+    ChartInfo,
+    ChartRecord,
+    ChartStat,
+    ChartVoting,
+    ExceptionRecord, RatingRecord,
+    SongDataVersion,
+    SongInfo,
 )
 from exception import ParameterError
 from log import logger
@@ -26,7 +29,7 @@ from model import (
     AllDiffStatDataModel,
     BasicChartInfoModel,
     PlayerPreferencesModel,
-    RecommendChartsModel,
+    RecommendChartsResultModel,
 )
 
 general_stat = {}
@@ -149,7 +152,7 @@ async def check_song_update() -> None:
         remote_version = (await get_song_version())[0]
         remote_data_url = (await get_song_version())[1]
         try:
-            local_version = song_data_version.get_or_none(key="version").value
+            local_version = SongDataVersion.get_or_none(key="version").value
         except Exception as e:
             local_version = -1
     except Exception as e:
@@ -214,9 +217,9 @@ async def run_song_update(data_url: str, new_version: str) -> None:
 
             charts_data.append(charts_info_dict)
 
-    song_info.replace_many(songs_data).execute()
-    chart_info.replace_many(charts_data).execute()
-    song_data_version.replace(key="version", value=new_version).execute()
+    SongInfo.replace_many(songs_data).execute()
+    ChartInfo.replace_many(charts_data).execute()
+    SongDataVersion.replace(key="version", value=new_version).execute()
 
 
 async def run_chart_stat_update() -> None:
@@ -250,18 +253,19 @@ async def run_chart_stat_update() -> None:
                     "fc_dist": chart["fc_dist"],
                 }
             )
-    chart_stat.replace_many(chart_stats).execute()
+    ChartStat.replace_many(chart_stats).execute()
 
 
-def separate_personal_data(personal_raw_data: List[dict]) -> Tuple[List, List]:
+def separate_personal_data(personal_raw_data: dict) -> Tuple[List, List]:
     personal_raw_data = personal_raw_data["records"]
     new_charts = filter(lambda x: x["song_id"] in new_song_id, personal_raw_data)
     old_charts = filter(lambda x: x["song_id"] not in new_song_id, personal_raw_data)
     return list(old_charts), list(new_charts)
 
 
-async def record_player_data(personal_raw_data: List[dict], player_id: str) -> None:
+async def record_player_data(personal_raw_data: dict) -> None:
     # 后台任务
+    player_id = personal_raw_data["username"]
     charts_list = []
     for charts in personal_raw_data["records"]:
         charts_list.append(
@@ -286,14 +290,14 @@ async def record_player_data(personal_raw_data: List[dict], player_id: str) -> N
         old_rating += i["ra"]
     for i in new_charts[:15]:
         new_rating += i["ra"]
-    rating_record.replace(
+    RatingRecord.replace(
         {
             "player_id": player_id,
             "old_song_rating": old_rating,
             "new_song_rating": new_rating,
         }
     ).execute()
-    chart_record.replace_many(charts_list).execute()
+    ChartRecord.replace_many(charts_list).execute()
 
 
 @async_ttl_cache(player_record_cache)
@@ -392,62 +396,62 @@ async def recommend_charts(
         upper_difficulty = float(upper_difficulty)
         lower_difficulty = float(lower_difficulty)
 
-        base_condition = chart_info.difficulty.between(
+        base_condition = ChartInfo.difficulty.between(
             lower_difficulty, upper_difficulty
         )
 
         grade_condition = (
-            (song_info.is_new == True) if is_new else (song_info.is_new == False)
+            (SongInfo.is_new == True) if is_new else (SongInfo.is_new == False)
         )
 
         # 使用 IF 函数，当 like 和 dislike 之和小于5时设为 0.5，否则计算比例
         like_dislike_ratio = fn.IF(
-            (chart_stat.like + chart_stat.dislike) < 5,
+            (ChartStat.like + ChartStat.dislike) < 5,
             0.5,
-            chart_stat.like / (chart_stat.like + chart_stat.dislike),
+            ChartStat.like / (ChartStat.like + ChartStat.dislike),
         )
 
         # 构建排序计算公式
         order_expression = (
-            chart_info.difficulty - chart_stat.fit_difficulty + like_dislike_ratio
-        ) * chart_stat.weight
+            ChartInfo.difficulty - ChartStat.fit_difficulty + like_dislike_ratio
+        ) * ChartStat.weight
 
         query = (
-            chart_info.select(
-                chart_info.song_id,
-                chart_info.level,
-                chart_voting.vote,
+            ChartInfo.select(
+                ChartInfo.song_id,
+                ChartInfo.level,
+                ChartVoting.vote,
             )
             .join(
-                chart_stat,
-                on=(chart_info.song_id == chart_stat.song_id)
-                & (chart_info.level == chart_stat.level),
+                ChartStat,
+                on=(ChartInfo.song_id == ChartStat.song_id)
+                & (ChartInfo.level == ChartStat.level),
             )
-            .join(song_info, on=(chart_info.song_id == song_info.song_id))
+            .join(SongInfo, on=(ChartInfo.song_id == SongInfo.song_id))
             .join(
-                chart_blacklist,
+                ChartBlacklist,
                 on=(
-                    (chart_info.song_id == chart_blacklist.song_id)
-                    & (chart_info.level == chart_blacklist.level)
-                    & (chart_blacklist.player_id == player_id)
+                    (ChartInfo.song_id == ChartBlacklist.song_id)
+                    & (ChartInfo.level == ChartBlacklist.level)
+                    & (ChartBlacklist.player_id == player_id)
                 ),
                 join_type=JOIN.LEFT_OUTER,
             )
             .join(
-                chart_voting,
+                ChartVoting,
                 on=(
-                    (chart_info.song_id == chart_voting.song_id)
-                    & (chart_info.level == chart_voting.level)
-                    & (chart_voting.player_id == player_id)
+                    (ChartInfo.song_id == ChartVoting.song_id)
+                    & (ChartInfo.level == ChartVoting.level)
+                    & (ChartVoting.player_id == player_id)
                 ),
                 join_type=JOIN.LEFT_OUTER,
             )  # 添加LEFT OUTER JOIN连接chart_voting表
             .where(
                 (base_condition & grade_condition)
-                & (chart_blacklist.player_id.is_null())
-                & (~(chart_info.song_id << filtered_song_ids))
+                & (ChartBlacklist.player_id.is_null())
+                & (~(ChartInfo.song_id << filtered_song_ids))
             )
-            .where(chart_stat.sample_num >= 100)
+            .where(ChartStat.sample_num >= 100)
             .order_by(order_expression.desc())
             .limit(limit)
         )
@@ -455,7 +459,7 @@ async def recommend_charts(
         # 查询结果转换为包含字典的列表
         result_list = []
         for record in query.objects():
-            merged_dict = RecommendChartsModel.parse_obj(record.__dict__).dict()
+            merged_dict = RecommendChartsResultModel.parse_obj(record.__dict__).dict()
             if not (
                 _grade := personal_grades_dict.get(
                     (merged_dict["song_id"], merged_dict["level"] - 1), None
@@ -489,7 +493,7 @@ async def recommend_charts(
             charts_score=charts_score_old,
             filtered_song_ids=filtered_song_ids,
         )
-    count_query = song_info.select().where(song_info.is_new == True).count()
+    count_query = SongInfo.select().where(SongInfo.is_new == True).count()
     if count_query < 30:
         new_songs_recommend = []
         new_song_min_score = np.min(charts_score_new)
@@ -533,27 +537,27 @@ async def operate_blacklist(
     reason: str,
 ):
     if operate == "add":
-        chart_blacklist.replace(
+        ChartBlacklist.replace(
             player_id=player_id, song_id=song_id, level=level, reason=reason
         ).execute()
     else:
-        chart_blacklist.delete().where(
+        ChartBlacklist.delete().where(
             player_id=player_id, song_id=song_id, level=level
         ).execute()
 
 
 async def get_blacklist(player_id: str) -> list:
-    return list(chart_blacklist.select().where(player_id == player_id).dicts())
+    return list(ChartBlacklist.select().where(player_id == player_id).dicts())
 
 
 async def set_like(player_id: str, song_id: int, level: int) -> None:
-    chart_voting.replace(
+    ChartVoting.replace(
         player_id=player_id, song_id=song_id, level=level, vote=LIKE
     ).execute()
 
 
 async def set_dislike(player_id: str, song_id: int, level: int) -> None:
-    chart_voting.replace(
+    ChartVoting.replace(
         player_id=player_id, song_id=song_id, level=level, vote=DISLIKE
     ).execute()
 
@@ -570,13 +574,13 @@ async def get_difficulty_difference(
 ) -> List[dict]:
     result = []
     query = (
-        chart_info.select(chart_info.song_id, chart_info.level)
-        .where(chart_info.old_difficulty != -1)
+        ChartInfo.select(ChartInfo.song_id, ChartInfo.level)
+        .where(ChartInfo.old_difficulty != -1)
         .where(
-            (chart_info.difficulty >= lower_difficulty)
-            & (chart_info.difficulty <= upper_difficulty)
+            (ChartInfo.difficulty >= lower_difficulty)
+            & (ChartInfo.difficulty <= upper_difficulty)
         )
-        .order_by((chart_info.difficulty - chart_info.old_difficulty).desc())
+        .order_by((ChartInfo.difficulty - ChartInfo.old_difficulty).desc())
         .limit(limit)
     )
 
@@ -597,32 +601,32 @@ async def get_most_popular_songs(
 ):
     result = []
     query = (
-        chart_info.select(chart_info.song_id, chart_info.level)
+        ChartInfo.select(ChartInfo.song_id, ChartInfo.level)
         .join(
-            chart_stat,
+            ChartStat,
             on=(
-                (chart_info.song_id == chart_stat.song_id)
-                & (chart_info.level == chart_stat.level)
+                (ChartInfo.song_id == ChartStat.song_id)
+                & (ChartInfo.level == ChartStat.level)
             ),
         )
-        .switch(chart_info)
-        .join(song_info, on=(chart_info.song_id == song_info.song_id))
+        .switch(ChartInfo)
+        .join(SongInfo, on=(ChartInfo.song_id == SongInfo.song_id))
         .where(
-            (chart_info.difficulty >= lower_difficulty)
-            & (chart_info.difficulty <= upper_difficulty)
+            (ChartInfo.difficulty >= lower_difficulty)
+            & (ChartInfo.difficulty <= upper_difficulty)
         )
     )
 
     if isinstance(chart_type, int):
-        query = query.where(song_info.type == chart_type)
+        query = query.where(SongInfo.type == chart_type)
 
     if genre:
-        query = query.where(song_info.genre == genre)
+        query = query.where(SongInfo.genre == genre)
 
     if version:
-        query = query.where(song_info.version == version)
+        query = query.where(SongInfo.version == version)
 
-    query = query.order_by(chart_stat.sample_num.desc()).limit(limit)
+    query = query.order_by(ChartStat.sample_num.desc()).limit(limit)
 
     for chart in query.objects():
         result.append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
@@ -638,26 +642,26 @@ async def get_relative_easy_or_hard_songs(
 ) -> dict:
     result = {"easy": [], "hard": []}
     basic_query = (
-        chart_info.select(chart_info.song_id, chart_info.level)
+        ChartInfo.select(ChartInfo.song_id, ChartInfo.level)
         .join(
-            chart_stat,
+            ChartStat,
             on=(
-                (chart_info.song_id == chart_stat.song_id)
-                & (chart_info.level == chart_stat.level)
+                (ChartInfo.song_id == ChartStat.song_id)
+                & (ChartInfo.level == ChartStat.level)
             ),
         )
         .where(
-            (chart_info.difficulty >= lower_difficulty)
-            & (chart_info.difficulty <= upper_difficulty)
+            (ChartInfo.difficulty >= lower_difficulty)
+            & (ChartInfo.difficulty <= upper_difficulty)
         )
-        .where(chart_stat.sample_num >= 100)
+        .where(ChartStat.sample_num >= 100)
     )
 
     desc_query = basic_query.order_by(
-        (chart_stat.fit_difficulty - chart_info.difficulty).desc()
+        (ChartStat.fit_difficulty - ChartInfo.difficulty).desc()
     ).limit(limit)
     asc_query = basic_query.order_by(
-        (chart_stat.fit_difficulty - chart_info.difficulty).asc()
+        (ChartStat.fit_difficulty - ChartInfo.difficulty).asc()
     ).limit(limit)
 
     for chart in desc_query.objects():
@@ -680,33 +684,33 @@ async def get_biggest_deviation_songs(
 ):
     result = []
     query = (
-        chart_info.select(chart_info.song_id, chart_info.level)
+        ChartInfo.select(ChartInfo.song_id, ChartInfo.level)
         .join(
-            chart_stat,
+            ChartStat,
             on=(
-                (chart_info.song_id == chart_stat.song_id)
-                & (chart_info.level == chart_stat.level)
+                (ChartInfo.song_id == ChartStat.song_id)
+                & (ChartInfo.level == ChartStat.level)
             ),
         )
-        .switch(chart_info)
-        .join(song_info, on=(chart_info.song_id == song_info.song_id))
+        .switch(ChartInfo)
+        .join(SongInfo, on=(ChartInfo.song_id == SongInfo.song_id))
         .where(
-            (chart_info.difficulty >= lower_difficulty)
-            & (chart_info.difficulty <= upper_difficulty)
+            (ChartInfo.difficulty >= lower_difficulty)
+            & (ChartInfo.difficulty <= upper_difficulty)
         )
-        .where(chart_stat.sample_num >= 100)
+        .where(ChartStat.sample_num >= 100)
     )
 
     if isinstance(chart_type, int):
-        query = query.where(song_info.type == chart_type)
+        query = query.where(SongInfo.type == chart_type)
 
     if genre:
-        query = query.where(song_info.genre == genre)
+        query = query.where(SongInfo.genre == genre)
 
     if version:
-        query = query.where(song_info.version == version)
+        query = query.where(SongInfo.version == version)
 
-    query = query.order_by(chart_stat.std_dev.desc()).limit(limit)
+    query = query.order_by(ChartStat.std_dev.desc()).limit(limit)
 
     for chart in query.objects():
         result.append(BasicChartInfoModel.parse_obj(chart.__dict__).dict())
@@ -720,9 +724,9 @@ async def get_player_record(player_id: str):
     chart_result = {}
     rating_result = []
     charts_records = (
-        chart_record.select()
-        .where(chart_record.player_id == player_id)
-        .order_by(chart_record.record_time.desc())
+        ChartRecord.select()
+        .where(ChartRecord.player_id == player_id)
+        .order_by(ChartRecord.record_time.desc())
     )
     for r in charts_records:
         keys = f"{r.song_id}-{r.level}"
@@ -740,9 +744,9 @@ async def get_player_record(player_id: str):
             }
         )
     rating_records = (
-        rating_record.select()
-        .where(rating_record.player_id == player_id)
-        .order_by(rating_record.record_time.desc())
+        RatingRecord.select()
+        .where(RatingRecord.player_id == player_id)
+        .order_by(RatingRecord.record_time.desc())
     )
     for r in rating_records:
         rating_result.append(
@@ -774,14 +778,14 @@ async def get_player_record(player_id: str):
 @async_ttl_cache(basic_info_cache)
 async def get_basic_info_frontend():
     query_results = (
-        song_info.select(song_info, chart_info, chart_stat)
-        .join(chart_info, on=(song_info.song_id == chart_info.song_id))
-        .switch(song_info)
+        SongInfo.select(SongInfo, ChartInfo, ChartStat)
+        .join(ChartInfo, on=(SongInfo.song_id == ChartInfo.song_id))
+        .switch(SongInfo)
         .join(
-            chart_stat,
+            ChartStat,
             on=(
-                (song_info.song_id == chart_stat.song_id)
-                & (chart_info.level == chart_stat.level)
+                (SongInfo.song_id == ChartStat.song_id)
+                & (ChartInfo.level == ChartStat.level)
             ),
         )
         .dicts()
@@ -830,3 +834,28 @@ async def check_update_on_startup() -> None:
     await check_song_update()
     await run_chart_stat_update()
     await update_public_player_rating()
+
+
+def record_exception(
+    e: Exception
+) -> str:
+    """
+    return:trace_id, exception_type
+    """
+    trace_id = str(uuid.uuid4())
+    try:
+        exception_type = type(e).__name__
+        exception_traceback = traceback.format_exc()
+        ExceptionRecord.replace(
+            id=trace_id,
+            type=exception_type,
+            brief=repr(e),
+            traceback=exception_traceback,
+            time=int(time.time()),
+        ).execute()
+    except Exception as e:
+        internal_trace_id = str(uuid.uuid4())
+        logger.exception(
+            f"detail information of internal trace id :{internal_trace_id} (recorded internal exception)\n"
+        )
+    return trace_id

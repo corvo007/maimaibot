@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import time
 
 import peewee
 from playhouse.shortcuts import ReconnectMixin
@@ -28,6 +29,10 @@ class CustomJSONField(peewee.TextField):
         return json.loads(value)
 
 
+class LongText(peewee.Field):
+    field_type = "LONGTEXT"
+
+
 song_database = RetryMySQLDatabase(
     host=config.MySQL.MySQL_host,
     port=config.MySQL.MySQL_port,
@@ -45,7 +50,7 @@ class BaseDatabase(peewee.Model):
         database = song_database
 
 
-class song_info(BaseDatabase):
+class SongInfo(BaseDatabase):
     song_id = peewee.BigIntegerField(primary_key=True)
 
     artist = peewee.CharField()
@@ -57,8 +62,8 @@ class song_info(BaseDatabase):
     type = peewee.IntegerField()  # 0:DX谱 1:标准谱
 
 
-class chart_info(BaseDatabase):
-    song_id = peewee.ForeignKeyField(song_info, on_delete="CASCADE")
+class ChartInfo(BaseDatabase):
+    song_id = peewee.ForeignKeyField(SongInfo, on_delete="CASCADE")
     level = peewee.IntegerField()  # 1~5分别代表Basic~Re:Master
 
     chart_design = peewee.CharField()  # 谱师
@@ -74,7 +79,7 @@ class chart_info(BaseDatabase):
         primary_key = peewee.CompositeKey("song_id", "level")
 
 
-class chart_stat(BaseDatabase):
+class ChartStat(BaseDatabase):
     song_id = peewee.BigIntegerField()
     level = peewee.IntegerField()
 
@@ -94,7 +99,7 @@ class chart_stat(BaseDatabase):
         primary_key = peewee.CompositeKey("song_id", "level")
 
 
-class chart_record(BaseDatabase):
+class ChartRecord(BaseDatabase):
     player_id = peewee.CharField()  # 登录用户名
     song_id = peewee.IntegerField()
     level = peewee.IntegerField()
@@ -109,7 +114,7 @@ class chart_record(BaseDatabase):
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
 
-class chart_blacklist(BaseDatabase):
+class ChartBlacklist(BaseDatabase):
     player_id = peewee.CharField()
     song_id = peewee.IntegerField()
     level = peewee.IntegerField()
@@ -121,7 +126,7 @@ class chart_blacklist(BaseDatabase):
         primary_key = peewee.CompositeKey("player_id", "song_id", "level")
 
 
-class rating_record(BaseDatabase):
+class RatingRecord(BaseDatabase):
     player_id = peewee.CharField()
     old_song_rating = peewee.IntegerField()
     new_song_rating = peewee.IntegerField()
@@ -129,12 +134,12 @@ class rating_record(BaseDatabase):
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
 
-class song_data_version(BaseDatabase):
+class SongDataVersion(BaseDatabase):
     key = peewee.CharField(primary_key=True)
     value = peewee.CharField()
 
 
-class chart_voting(BaseDatabase):
+class ChartVoting(BaseDatabase):
     player_id = peewee.CharField()
     song_id = peewee.IntegerField()
     level = peewee.IntegerField()
@@ -142,3 +147,11 @@ class chart_voting(BaseDatabase):
 
     class Meta:
         primary_key = peewee.CompositeKey("player_id", "song_id", "level")
+
+
+class ExceptionRecord(BaseDatabase):
+    id = peewee.CharField(primary_key=True)  # traceid
+    type = peewee.CharField()  # 异常类型
+    brief = peewee.CharField()  # 异常详情
+    traceback = LongText()  # 堆栈跟踪,长文本类型
+    time = peewee.TimestampField(default=time.time())
