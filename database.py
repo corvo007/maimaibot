@@ -1,12 +1,21 @@
 import datetime
 import json
 import os
+import re
 import time
 
 import peewee
 from playhouse.shortcuts import ReconnectMixin
 
 from model import ConfigModel
+
+
+def camel_to_snake(name):
+    """
+    Convert CamelCase to snake_case
+    """
+    name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
 
 class RetryMySQLDatabase(ReconnectMixin, peewee.MySQLDatabase):
@@ -61,6 +70,9 @@ class SongInfo(BaseDatabase):
     is_new = peewee.BooleanField()  # 是否为当前版本歌曲
     type = peewee.IntegerField()  # 0:DX谱 1:标准谱
 
+    class Meta:
+        db_table = camel_to_snake("SongInfo")
+
 
 class ChartInfo(BaseDatabase):
     song_id = peewee.ForeignKeyField(SongInfo, on_delete="CASCADE")
@@ -77,6 +89,7 @@ class ChartInfo(BaseDatabase):
 
     class Meta:
         primary_key = peewee.CompositeKey("song_id", "level")
+        db_table = camel_to_snake("ChartInfo")
 
 
 class ChartStat(BaseDatabase):
@@ -97,6 +110,7 @@ class ChartStat(BaseDatabase):
 
     class Meta:
         primary_key = peewee.CompositeKey("song_id", "level")
+        db_table = camel_to_snake("ChartStat")
 
 
 class ChartRecord(BaseDatabase):
@@ -113,6 +127,9 @@ class ChartRecord(BaseDatabase):
 
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
+    class Meta:
+        db_table = camel_to_snake("ChartRecord")
+
 
 class ChartBlacklist(BaseDatabase):
     player_id = peewee.CharField()
@@ -124,6 +141,7 @@ class ChartBlacklist(BaseDatabase):
 
     class Meta:
         primary_key = peewee.CompositeKey("player_id", "song_id", "level")
+        db_table = camel_to_snake("ChartBlacklist")
 
 
 class RatingRecord(BaseDatabase):
@@ -133,10 +151,16 @@ class RatingRecord(BaseDatabase):
 
     record_time = peewee.DateTimeField(default=datetime.datetime.now())
 
+    class Meta:
+        db_table = camel_to_snake("RatingRecord")
+
 
 class SongDataVersion(BaseDatabase):
     key = peewee.CharField(primary_key=True)
     value = peewee.CharField()
+
+    class Meta:
+        db_table = camel_to_snake("SongDataVersion")
 
 
 class ChartVoting(BaseDatabase):
@@ -147,6 +171,7 @@ class ChartVoting(BaseDatabase):
 
     class Meta:
         primary_key = peewee.CompositeKey("player_id", "song_id", "level")
+        db_table = camel_to_snake("ChartVoting")
 
 
 class ExceptionRecord(BaseDatabase):
@@ -155,3 +180,6 @@ class ExceptionRecord(BaseDatabase):
     brief = peewee.CharField()  # 异常详情
     traceback = LongText()  # 堆栈跟踪,长文本类型
     time = peewee.TimestampField(default=time.time())
+
+    class Meta:
+        db_table = camel_to_snake("ExceptionRecord")
