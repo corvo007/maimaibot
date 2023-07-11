@@ -19,7 +19,8 @@ from database import (
     ChartRecord,
     ChartStat,
     ChartVoting,
-    ExceptionRecord, RatingRecord,
+    ExceptionRecord,
+    RatingRecord,
     SongDataVersion,
     SongInfo,
 )
@@ -35,31 +36,6 @@ from model import (
 general_stat = {}
 new_song_id = []
 best_fit = None  # 拟合模型参数
-
-new_song_id = [
-    10146,
-    10176,
-    11349,
-    11350,
-    11351,
-    11352,
-    11353,
-    11354,
-    11357,
-    11359,
-    11360,
-    11361,
-    11362,
-    11363,
-    11364,
-    11365,
-    11366,
-    11401,
-    11402,
-    11507,
-    11508,
-    11509,
-]
 
 
 class BestFitDistribution:
@@ -133,8 +109,7 @@ def async_ttl_cache(cache):
 
 basic_info_cache = AsyncTTLCache(maxsize=100, ttl=43200)  # 歌曲及谱面基本信息缓存12小时
 stat_cache = AsyncTTLCache(maxsize=150, ttl=1800)  # 统计信息缓存30分钟
-player_record_cache = AsyncTTLCache(maxsize=250, ttl=180)
-# 缓存180秒(只是为了确保请求token和推荐谱面不重复请求api，还会有Etag做缓存控制)
+player_record_cache = AsyncTTLCache(maxsize=250, ttl=300)  # 缓存5分钟
 
 
 async def get_song_version() -> Tuple[str, str]:
@@ -164,6 +139,16 @@ async def check_song_update() -> None:
     if remote_version != local_version:
         logger.info("song database need update, updating...")
         await run_song_update(remote_data_url, remote_version)
+
+
+def update_new_song_id():
+    global new_song_id
+    new_song_id = [
+        i["song_id"]
+        for i in list(
+            SongInfo.select(SongInfo.song_id).where(SongInfo.is_new == True).dicts()
+        )
+    ]
 
 
 async def run_song_update(data_url: str, new_version: str) -> None:
@@ -326,6 +311,7 @@ async def get_player_data_from_remote(
     return resp.json()"""
 
 
+@async_ttl_cache(player_record_cache)
 async def recommend_charts(
     personal_raw_data: dict,
     preferences: PlayerPreferencesModel = None,
@@ -836,12 +822,7 @@ async def check_update_on_startup() -> None:
     await update_public_player_rating()
 
 
-def record_exception(
-    e: Exception
-) -> str:
-    """
-    return:trace_id, exception_type
-    """
+async def record_exception(e: Exception) -> str:
     trace_id = str(uuid.uuid4())
     try:
         exception_type = type(e).__name__
