@@ -49,7 +49,7 @@ class BasicChartInfoModel(BaseModel):
         return values
 
 
-class RecommendChartsModel(BasicChartInfoModel):
+class RecommendChartsResultModel(BasicChartInfoModel):
     vote: Optional[Literal[LIKE, DISLIKE, None]] = None
 
 
@@ -81,13 +81,13 @@ class GeneralResponseModel(BaseModel):
 class FilterModel(BaseModel):
     upper_difficulty: Optional[float] = Field(15.0, ge=1.0, le=15.0)
     lower_difficulty: Optional[float] = Field(1.0, ge=1.0, le=15.0)
-    limit: Optional[int] = Field(20, gt=0)
+    limit: Optional[int] = Field(30, gt=0)
 
     @validator("lower_difficulty", pre=True, always=True)
     def lower_can_not_exceed_upper(cls, v, values):
         upper = values.get("upper_difficulty")
         if upper is not None and v > upper:
-            raise ValueError("lower_difficulty can't be greater than upper_difficulty")
+            raise ValueError("lower_difficulty不能大于upper_difficulty")
         return v
 
 
@@ -99,14 +99,34 @@ class CompFilterModel(FilterModel):
     @validator("chart_type")
     def convert_chart_type(cls, v):
         if v is not None and v not in [DX_CHART, STD_CHART]:
-            raise ValueError("Invalid chart type")
+            raise ValueError("无效的chart_type")
 
     @validator("version")
     def check_version(cls, v):
         if v is not None and v not in MAIMAI_VERSION:
-            raise ValueError("Invalid maimai version")
+            raise ValueError("无效的version")
 
     @validator("genre")
     def check_genre(cls, v):
         if v is not None and v not in SONG_GENRE:
-            raise ValueError("Invalid song genre")
+            raise ValueError("无效的genre")
+
+
+class PlayerInfoModel(BaseModel):
+    bind_qq: Optional[int]
+    username: Optional[str]
+
+    @root_validator
+    def check(cls, values):
+        bind_qq = values.get("bind_qq")
+        username = values.get("username")
+        if bind_qq is None and (username is None or username.strip() == ""):
+            raise ValueError("至少提供bind_qq或username")
+        if bind_qq and username:
+            raise ValueError("不能同时提供bind_qq和username")
+        return values
+
+
+class RecommendChartsModel(PlayerInfoModel):
+    limit: Optional[int] = Field(50, gt=0)
+    preferences: Optional[PlayerPreferencesModel]
