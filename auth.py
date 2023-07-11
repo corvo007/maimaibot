@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+from jose import ExpiredSignatureError, JWTError, jwt
 from pydantic import ValidationError
 
 from core import get_player_data_from_remote
@@ -14,14 +14,19 @@ from model import TokenDataModel
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")  # TODO:add token url
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
+def get_current_player(token: str = Depends(oauth2_scheme)) -> dict:
     try:
-        payload = jwt.decode(token, config.app.secret_key, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            config.app.secret_key,
+            algorithms=["HS256"],
+            options={"verify_signature": True, "verify_exp": True, "require_exp": True},
+        )
         username: str = payload.get("username")
         if username is None:
             raise InvalidTokenError
         token_data = TokenDataModel(username=username)
-    except (JWTError, ValidationError):
+    except (JWTError, ValidationError, ExpiredSignatureError):
         raise InvalidTokenError
 
     return token_data.dict()
@@ -38,7 +43,7 @@ async def generate_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 
-def validate_player(user_id: str, bind_qq: int) -> dict:
-    result = await get_player_data_from_remote(user_id, bind_qq)
+async def validate_player(username: str, bind_qq: int) -> Tuple[dict, dict]:
+    result = await get_player_data_from_remote(username, bind_qq)
     access_token = await generate_token({"username": result["username"]})
-    return {"access_token": access_token, "username": result["username"]}
+    return {"access_token": access_token, "username": result["username"]}, result
