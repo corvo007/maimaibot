@@ -10,16 +10,19 @@ from starlette.responses import JSONResponse
 from core import (
     check_song_update,
     check_update_on_startup,
+    record_exception,
     run_chart_stat_update,
+    update_new_song_id,
     update_public_player_rating,
 )
 from database import BaseDatabase, config, song_database
-from endpoint import ETagMiddleware, charts_router
+from endpoint import ETagMiddleware, charts_router, player_router
 from exception import *
 from log import logger
 
 app = FastAPI(title="maibot")
 app.include_router(charts_router)
+app.include_router(player_router)
 app.add_middleware(ETagMiddleware)
 scheduler = AsyncIOScheduler()
 
@@ -45,6 +48,7 @@ async def initialize_database():
 
 @app.on_event("startup")
 async def _check_update_on_startup() -> None:
+    update_new_song_id()
     asyncio.create_task(check_update_on_startup())
 
 
@@ -75,13 +79,20 @@ async def check_update_regularly() -> None:
 @app.exception_handler(404)
 async def _handle_404(request: Request, exc: Exception):
     error_msg = (
-        "未找到玩家信息，请确认输入是否正确。"
-        if isinstance(exc, NoSuchPlayerError)
-        else f"未找到你所请求的网页。\n请求URL：{request.url}"
+        "未找到玩家信息，请确认输入是否正确。" if isinstance(exc, NoSuchPlayerError) else f"未找到你所请求的网页。"
     )
     return JSONResponse(
         status_code=404,
         content={"code": -404, "data": {}, "message": error_msg},
+        media_type="application/json",
+    )
+
+
+@app.exception_handler(405)
+async def _handle_405(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=405,
+        content={"code": -405, "data": {}, "message": "不支持请求的方法"},
         media_type="application/json",
     )
 
@@ -102,12 +113,15 @@ async def _handle_401(request: Request, exc: Exception):
 
 @app.exception_handler(500)
 async def _handle_500(request: Request, exc: Exception):
-    logger.exception(exc)
+    trace_id = await record_exception(exc)
     return JSONResponse(
         status_code=500,
-        content={"code": -500, "data": {}, "message": f"发生了内部错误。\n请求URL：{request.url}"},
+        content={
+            "code": -500,
+            "data": {},
+            "message": f"发生了内部错误，请稍后重试。\ntrace_id:{trace_id}",
+        },
         media_type="application/json",
-        background=logger.exception(exc),
     )
 
 
@@ -128,10 +142,9 @@ async def _handle_422(request: Request, exc: Exception):
         content={
             "code": -422,
             "data": {},
-            "message": f"查询参数无效。\n请求URL：{request.url} \n详情:{error_msg}",
+            "message": f"查询参数无效。\n详情:{error_msg}",
         },
         media_type="application/json",
-        background=logger.error(exc),
     )
 
 
