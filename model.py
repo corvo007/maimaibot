@@ -63,8 +63,8 @@ class AllDiffStatDataModel(BaseModel):
     diff_data: Dict[str, DiffStatDataModel]
 
 
-class TokenDataModel(BaseModel):
-    username: Optional[str] = None
+class OnlyPlayeridModel(BaseModel):
+    player_id: str
 
 
 class TokenModel(BaseModel):
@@ -130,3 +130,23 @@ class PlayerInfoModel(BaseModel):
 class RecommendChartsModel(PlayerInfoModel):
     limit: Optional[int] = Field(50, gt=0)
     preferences: Optional[PlayerPreferencesModel]
+
+
+class OperateBlacklistModel(BaseModel):
+    player_id: str
+    song_id: int
+    level: int = Field(ge=1, le=5)
+    operate: Literal["add", "delete"]
+    reason: str
+
+
+class VoteSongsModel(BaseModel):
+    player_id: str
+    song_id: int
+    level: int = Field(ge=1, le=5)
+    operate: int
+
+    @validator("operate")
+    def check_operate(cls, v):
+        if v is not None and v not in [LIKE, DISLIKE]:
+            raise ValueError("无效的operate")

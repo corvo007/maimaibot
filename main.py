@@ -1,5 +1,3 @@
-import asyncio
-
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
@@ -7,16 +5,9 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
 
-from core import (
-    check_song_update,
-    check_update_on_startup,
-    record_exception,
-    run_chart_stat_update,
-    update_new_song_id,
-    update_public_player_rating,
-)
+from core import *
 from database import BaseDatabase, config, song_database
-from endpoint import ETagMiddleware, charts_router, player_router
+from endpoint import ETagMiddleware, ThrottlingMiddleware, charts_router, player_router
 from exception import *
 from log import logger
 
@@ -24,6 +15,14 @@ app = FastAPI(title="maibot")
 app.include_router(charts_router)
 app.include_router(player_router)
 app.add_middleware(ETagMiddleware)
+app.add_middleware(
+    ThrottlingMiddleware,
+    default_rate=0.5,  # sets default to add 1 token for every 2 seconds
+    default_capacity=10,  # sets default maximum tokens to 30
+    config={
+        "/api/v1/maimai/player/sync_record": {"rate": 1 / 30, "capacity": 2},
+    },
+)
 scheduler = AsyncIOScheduler()
 
 
