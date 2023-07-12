@@ -1,14 +1,115 @@
 import hashlib
+import typing
 from typing import Awaitable, Callable
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from core import *
-from model import CompFilterModel, FilterModel, GeneralResponseModel
+from model import *
 
-router = APIRouter(prefix="/api/v1/maimai")
+charts_router = APIRouter(prefix="/api/v1/maimai/charts")
+player_router = APIRouter(prefix="/api/v1/maimai/player")
+
+
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.generic):
+            return obj.item()
+        return super().default(obj)
+
+
+class CustomJSONResponse(JSONResponse):
+    def render(self, content: typing.Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+            cls=CustomJSONEncoder,
+        ).encode("utf-8")
+
+
+import time
+
+
+class TokenBucket(object):
+    def __init__(self, rate, capacity):
+        self._rate = rate
+        self._capacity = capacity
+        self._tokens = 0
+        self._last = 0
+
+    def consume(self):
+        now = int(time.time())
+        lapse = now - self._last
+        self._last = now
+        self._tokens += lapse * self._rate
+        self._tokens = min(self._tokens, self._capacity)
+        if self._tokens >= 1:
+            self._tokens -= 1
+            return True
+        return False
+
+
+class RateLimiter(object):
+    def __init__(self, rate, capacity):
+        self._default_bucket = TokenBucket(rate, capacity)
+        self._buckets = {}
+
+    def get_bucket(self, key, rate=None, capacity=None):
+        if key not in self._buckets:
+            self._buckets[key] = TokenBucket(
+                rate or self._default_bucket._rate,
+                capacity or self._default_bucket._capacity,
+            )
+        return self._buckets[key]
+
+    def is_allowed(self, key):
+        return self.get_bucket(key).consume()
+
+
+class ThrottlingMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, default_rate, default_capacity, config=None):
+        super().__init__(app)
+        self.default_rate = default_rate
+        self.default_capacity = default_capacity
+        self.config = config or {}
+        self.rate_limiter = RateLimiter(default_rate, default_capacity)
+
+    async def dispatch(self, request: Request, call_next):
+        # If the request is forwarded from a proxy server like Nginx,
+        # we should get the client's original IP from 'x-forwarded-for' header.
+        client_ip = request.headers.get("x-forwarded-for") or request.client.host
+
+        path = str(request.url.path)
+        client_path = path + client_ip  # combining path and client ip
+
+        rate = self.config.get(path, {}).get("rate", self.default_rate)
+        capacity = self.config.get(path, {}).get("capacity", self.default_capacity)
+        bucket = self.rate_limiter.get_bucket(client_path, rate, capacity)
+
+        if not bucket.consume():
+            retry_after = int(1 / rate)
+            response = JSONResponse(
+                content=GeneralResponseModel(
+                    message=f"Too many requests from {client_ip}. Try again after {retry_after} seconds."
+                ).dict(),
+                headers={"Retry-After": str(retry_after)},
+                status_code=429,
+            )
+        else:
+            response = await call_next(request)
+
+        return response
 
 
 async def async_generator(body):
@@ -16,10 +117,7 @@ async def async_generator(body):
 
 
 class ETagMiddleware(BaseHTTPMiddleware):
-    exclude_paths = [
-        "/login",
-        "/another_path",
-    ]  # add paths that you want to exclude here
+    exclude_paths = ["/set_account"]
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
