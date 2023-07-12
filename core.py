@@ -1,10 +1,8 @@
 import asyncio
-import json
-import time
 import traceback
 import uuid
 from functools import wraps
-from typing import List, Literal, Optional, Tuple
+from typing import Tuple
 
 import httpx
 import numpy as np
@@ -12,26 +10,10 @@ import scipy.stats as stats
 from cachetools import TTLCache
 from peewee import JOIN, fn
 
-from const import *
-from database import (
-    ChartBlacklist,
-    ChartInfo,
-    ChartRecord,
-    ChartStat,
-    ChartVoting,
-    ExceptionRecord,
-    RatingRecord,
-    SongDataVersion,
-    SongInfo,
-)
+from database import *
 from exception import ParameterError
 from log import logger
-from model import (
-    AllDiffStatDataModel,
-    BasicChartInfoModel,
-    PlayerPreferencesModel,
-    RecommendChartsResultModel,
-)
+from model import *
 
 general_stat = {}
 new_song_id = []
@@ -250,6 +232,7 @@ def separate_personal_data(personal_raw_data: dict) -> Tuple[List, List]:
 
 async def record_player_data(personal_raw_data: dict) -> None:
     # 后台任务
+    # TODO:去重（指去掉achievement相同的歌）
     player_id = personal_raw_data["username"]
     charts_list = []
     for charts in personal_raw_data["records"]:
@@ -536,15 +519,11 @@ async def get_blacklist(player_id: str) -> list:
     return list(ChartBlacklist.select().where(player_id == player_id).dicts())
 
 
-async def set_like(player_id: str, song_id: int, level: int) -> None:
+async def vote_songs(
+    player_id: str, song_id: int, level: int, operate: Literal[LIKE, DISLIKE]
+) -> None:
     ChartVoting.replace(
-        player_id=player_id, song_id=song_id, level=level, vote=LIKE
-    ).execute()
-
-
-async def set_dislike(player_id: str, song_id: int, level: int) -> None:
-    ChartVoting.replace(
-        player_id=player_id, song_id=song_id, level=level, vote=DISLIKE
+        player_id=player_id, song_id=song_id, level=level, vote=operate
     ).execute()
 
 
@@ -705,7 +684,7 @@ async def get_biggest_deviation_songs(
 
 
 async def get_player_record(player_id: str):
-    # 前端区分新曲/老曲
+    # TODO:后端区分新旧曲，按rating排序
     # 如果是从api直接获取数据，那么看不到比最好成绩差的成绩
     chart_result = {}
     rating_result = []
@@ -743,13 +722,16 @@ async def get_player_record(player_id: str):
             }
         )
     if len(rating_result) >= 1:
-        rating_percentile = round(
-            await get_player_percentile(
-                rating_result[0]["old_song_rating"]
-                + rating_result[0]["new_song_rating"]
-            ),
-            2,
-        )
+        try:
+            rating_percentile = round(
+                await get_player_percentile(
+                    rating_result[0]["old_song_rating"]
+                    + rating_result[0]["new_song_rating"]
+                ),
+                2,
+            )
+        except Exception as e:
+            rating_percentile = "N/A"
     else:
         rating_percentile = "N/A"
     result = {
